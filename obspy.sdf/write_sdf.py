@@ -13,13 +13,12 @@ import argparse
 import h5py
 import obspy
 import os
-import sys
 import warnings
 
 
 FORMAT_VERSION = "0.0.1a"
 # List all compression options.
-COMPRESSION = {
+COMPRESSIONS = {
     None: (None, None),
     "lzf": ("lzf", None),
     "gzip-0": ("gzip", 0),
@@ -77,6 +76,11 @@ def write_sdf(stream, filename, append=False, compression="szip-nn-10",
     :param tag: An additional tag to append to the name of each trace in the
         stream object.
     """
+    if compression not in COMPRESSIONS:
+        msg = "Unknown compressions '%s'. Available compressions: \n\t%s" % (
+            compression, "\n\t".join(sorted(
+                [str(i) for i in COMPRESSIONS.keys()])))
+        raise Exception(msg)
     # Open file, either appending or truncating.
     if append is True:
         f = h5py.File(filename, "a")
