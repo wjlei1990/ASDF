@@ -125,6 +125,22 @@ def write_sdf(stream, file_object, append=False, compression="szip-nn-10",
         f.close()
 
 
+def add_quakeml(file_object, quakeml_filename):
+    """
+    Add a QuakeML file to an existing open HDF5 object.
+    """
+    f = file_object
+    if "QuakeML" in f:
+        msg = "HDF5 file already contains a QuakeML file"
+        raise Exception(msg)
+
+    # Use a variable string to save the QuakeML file.
+    str_type = h5py.new_vlen(str)
+    quake_str = f.create_dataset("QuakeML", shape=(1,), dtype=str_type)
+    with open(quakeml_filename) as fh:
+        quake_str[:] = fh.read()
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Create a big SDF file from a QuakeML file, a folder of "
@@ -157,6 +173,7 @@ if __name__ == "__main__":
         raise Exception(msg)
 
     file_object = h5py.File(args.output, "w")
+    add_quakeml(file_object, args.quakeml)
 
     for filename in os.listdir(args.waveforms):
         # Make sure it is written for every file.
