@@ -13,6 +13,7 @@ import argparse
 import h5py
 import obspy
 import os
+import sys
 import warnings
 
 
@@ -53,9 +54,10 @@ def _generate_unique_name(station_name, starttime, endtime, existing_names,
     while True:
         if extra_tag:
             base_name += "_%i" % extra_tag
-        if base_name in existing_names:
+        if base_name not in existing_names:
             break
         extra_tag += 1
+    return base_name
 
 
 def write_sdf(stream, filename, append=False, compression="szip-nn-10",
@@ -77,9 +79,9 @@ def write_sdf(stream, filename, append=False, compression="szip-nn-10",
     """
     # Open file, either appending or truncating.
     if append is True:
-        f = h5py.File("test.wave5", "a")
+        f = h5py.File(filename, "a")
     else:
-        f = h5py.File("test.wave5", "w")
+        f = h5py.File(filename, "w")
 
     # Write some attributes to the file.
     f.attrs["file_format"] = "SDF"
@@ -92,7 +94,7 @@ def write_sdf(stream, filename, append=False, compression="szip-nn-10",
 
     # Loop over traces and add them.
     for trace in stream:
-        station_name = ".".join(trace.stats.network, trace.stats.station)
+        station_name = ".".join((trace.stats.network, trace.stats.station))
         if not station_name in waveforms:
             waveforms.create_group(station_name)
         station = waveforms[station_name]
