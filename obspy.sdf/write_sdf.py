@@ -143,6 +143,40 @@ def add_quakeml(file_object, quakeml_filename):
     quake_str[...] = quake_ml_array
 
 
+def add_stationxml(file_object, stationxml_filename):
+    """
+    Traverses the HDF5 file and adds the station where appropriate. Currently
+    parses the station filename to get the station. Should of course be handled
+    differently.
+    """
+    f = file_object
+
+    # Get waveforms, create if non existent.
+    if not "Waveforms" in f:
+        f.create_group("Waveforms")
+    waveforms = f["Waveforms"]
+
+    station_name = ".".join(os.path.basename(
+        stationxml_filename).split(".")[:2])
+
+    if not station_name in waveforms:
+        waveforms.create_group(station_name)
+    station = waveforms[station_name]
+
+    if "StationXML" in station:
+        msg = "HDF5 file already contains a StationXML file for station %s." \
+            % station_name
+        raise warnings.warn(msg)
+        return
+
+    with open(stationxml_filename, "rb") as fh:
+        station_array = np.void(fh.read())
+
+    station_str = f.create_dataset("StationXML", shape=station_array.shape,
+                                   dtype=station_array.dtype)
+    station_str[...] = station_array
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Create a big SDF file from a QuakeML file, a folder of "
