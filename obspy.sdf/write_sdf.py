@@ -9,8 +9,11 @@ Prototype implementation for a new file format using Python and ObsPy.
     GNU Lesser General Public License, Version 3
     (http://www.gnu.org/copyleft/lesser.html)
 """
-import obspy
+import argparse
 import h5py
+import obspy
+import os
+import warnings
 
 
 FORMAT_VERSION = "0.0.1a"
@@ -107,4 +110,46 @@ def write_sdf(stream, filename, append=False, compression="szip-nn-10",
 
 
 if __name__ == "__main__":
-    pass
+    parser = argparse.ArgumentParser(
+        description="Create a big SDF file from a QuakeML file, a folder of "
+        "waveform files, and a folder of StationXML files. Only useful for "
+        "event based data right now.")
+    parser.add_argument("--quakeml", required=True, dest="quakeml",
+                        help="The QuakeML file to be used.")
+    parser.add_argument("--stationxml_path", required=True, dest="station_xml",
+                        help="Path a folder containing only StationXML files.")
+    parser.add_argument("--waveform_path", required=True, dest="waveforms",
+                        help="Path a folder containing only waveform files "
+                        "belonging to the event.")
+    parser.add_argument("-o", "--output", required=True, dest="output",
+                        help="Output filename.")
+    args = parser.parse_args()
+
+    # Limited sanity checks.
+    if not os.path.exists(args.station_xml) or \
+            not os.path.isdir(args.station_xml):
+        msg = "StationXML folder does not exist."
+        raise Exception(msg)
+    if not os.path.exists(args.waveforms) or not os.path.isdir(args.waveforms):
+        msg = "Waveform folder does not exist."
+        raise Exception(msg)
+    if not os.path.exists(args.quakeml) or not os.path.isfile(args.quakeml):
+        msg = "QuakeML file does not exist."
+        raise Exception(msg)
+    if os.path.exists(args.output):
+        msg = "Output path already exists."
+        raise Exception(msg)
+
+    for filename in os.listdir(args.waveforms):
+        print ".",
+        try:
+            st = obspy.read(os.path.join(args.waveforms, filename))
+        except:
+            msg = "'%s' could not be read." % filename
+            warnings.warn(msg)
+            continue
+
+        # This is rather inefficient as it will open and close the file a lot.
+        # But just for testing it is fine!
+        write_sdf(st, args.output, append=True)
+    print ""
