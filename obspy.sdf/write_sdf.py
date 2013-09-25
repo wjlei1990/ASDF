@@ -81,6 +81,8 @@ def write_sdf(stream, filename, append=False, compression="szip-nn-10",
             compression, "\n\t".join(sorted(
                 [str(i) for i in COMPRESSIONS.keys()])))
         raise Exception(msg)
+    compression = COMPRESSIONS[compression]
+
     # Open file, either appending or truncating.
     if append is True:
         f = h5py.File(filename, "a")
