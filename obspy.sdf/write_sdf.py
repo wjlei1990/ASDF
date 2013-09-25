@@ -172,8 +172,8 @@ def add_stationxml(file_object, stationxml_filename):
     with open(stationxml_filename, "rb") as fh:
         station_array = np.void(fh.read())
 
-    station_str = f.create_dataset("StationXML", shape=station_array.shape,
-                                   dtype=station_array.dtype)
+    station_str = station.create_dataset(
+        "StationXML", shape=station_array.shape, dtype=station_array.dtype)
     station_str[...] = station_array
 
 
@@ -230,7 +230,7 @@ if __name__ == "__main__":
         # Make sure it is written for every file.
         sys.stdout.write(".")
         sys.stdout.flush()
-        add_stationxml(file_object, filename)
+        add_stationxml(file_object, os.path.join(args.station_xml, filename))
     print ""
 
     file_object.close()
