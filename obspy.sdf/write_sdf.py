@@ -11,6 +11,7 @@ Prototype implementation for a new file format using Python and ObsPy.
 """
 import argparse
 import h5py
+import numpy as np
 import obspy
 import os
 import warnings
@@ -134,11 +135,12 @@ def add_quakeml(file_object, quakeml_filename):
         msg = "HDF5 file already contains a QuakeML file"
         raise Exception(msg)
 
-    # Use a variable string to save the QuakeML file.
-    str_type = h5py.new_vlen(str)
-    quake_str = f.create_dataset("QuakeML", shape=(1,), dtype=str_type)
-    with open(quakeml_filename) as fh:
-        quake_str[:] = fh.read()
+    with open(quakeml_filename, "rb") as fh:
+        quake_ml_array = np.void(fh.read())
+
+    quake_str = f.create_dataset("QuakeML", shape=quake_ml_array.shape,
+                                 dtype=quake_ml_array.dtype)
+    quake_str[...] = quake_ml_array
 
 
 if __name__ == "__main__":
