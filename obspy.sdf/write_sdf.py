@@ -14,6 +14,7 @@ import h5py
 import obspy
 import os
 import warnings
+import sys
 
 
 FORMAT_VERSION = "0.0.1a"
@@ -59,16 +60,17 @@ def _generate_unique_name(station_name, starttime, endtime, existing_names,
     return base_name
 
 
-def write_sdf(stream, filename, append=False, compression="szip-nn-10",
+def write_sdf(stream, file_object, append=False, compression="szip-nn-10",
               tag=None):
     """
     :type stream: :class:`~obspy.core.stream.Stream`
     :param stream: The stream to be written to the filename.
-    :type filename: basestring
-    :param filename: The filename to be written to.
+    :type file_object: filename or open h5py object.
+    :param file_object: The filename or object to be written to.
     :type append: bool, optional
     :param append: If False, a new file will be created. If True, the data will
-        be added to an possibly already existing file. Defaults to False.
+        be added to an possibly already existing file. Defaults to False. Only
+        useful when a filename is given.
     :type compression: str, optional
     :param compression: The compression to use. Defaults to 'szip-nn-10' which
         yielded good results in the past.
@@ -84,10 +86,13 @@ def write_sdf(stream, filename, append=False, compression="szip-nn-10",
     compression = COMPRESSIONS[compression]
 
     # Open file, either appending or truncating.
-    if append is True:
-        f = h5py.File(filename, "a")
+    if isinstance(file_object, basestring):
+        if append is True:
+            f = h5py.File(file_object, "a")
+        else:
+            f = h5py.File(file_object, "w")
     else:
-        f = h5py.File(filename, "w")
+        f = file_object
 
     # Write some attributes to the file.
     f.attrs["file_format"] = "SDF"
@@ -114,7 +119,10 @@ def write_sdf(stream, filename, append=False, compression="szip-nn-10",
                                       compression_opts=compression[1])
         # Actually write the data.
         data[...] = trace.data
-    f.close()
+
+    # Close if created in the function.
+    if isinstance(file_object, basestring):
+        f.close()
 
 
 if __name__ == "__main__":
@@ -148,8 +156,12 @@ if __name__ == "__main__":
         msg = "Output path already exists."
         raise Exception(msg)
 
+    file_object = h5py.File(args.output, "w")
+
     for filename in os.listdir(args.waveforms):
-        print ".",
+        # Make sure it is written for every file.
+        sys.stdout.write(".")
+        sys.stdout.flush()
         try:
             st = obspy.read(os.path.join(args.waveforms, filename))
         except:
@@ -159,5 +171,6 @@ if __name__ == "__main__":
 
         # This is rather inefficient as it will open and close the file a lot.
         # But just for testing it is fine!
-        write_sdf(st, args.output, append=True)
+        write_sdf(st, file_object, append=True)
     print ""
+    file_object.close()
