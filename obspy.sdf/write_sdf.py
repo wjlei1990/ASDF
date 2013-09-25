@@ -211,6 +211,7 @@ if __name__ == "__main__":
     file_object = h5py.File(args.output, "w")
     add_quakeml(file_object, args.quakeml)
 
+    print "Adding waveforms..."
     for filename in os.listdir(args.waveforms):
         # Make sure it is written for every file.
         sys.stdout.write(".")
@@ -221,9 +222,15 @@ if __name__ == "__main__":
             msg = "'%s' could not be read." % filename
             warnings.warn(msg)
             continue
-
-        # This is rather inefficient as it will open and close the file a lot.
-        # But just for testing it is fine!
         write_sdf(st, file_object, append=True)
     print ""
+
+    print "Adding stations..."
+    for filename in os.listdir(args.station_xml):
+        # Make sure it is written for every file.
+        sys.stdout.write(".")
+        sys.stdout.flush()
+        add_stationxml(file_object, filename)
+    print ""
+
     file_object.close()
