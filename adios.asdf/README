@@ -1,0 +1,12 @@
+
+This package is designed to generate an ASDF file for an earthquake data set.
+
+To compile type 'make' at the command line.
+
+Description of Files:
+        DATA : Directory of eartquake data set (sac waveforms, quakeML, StationXML files)
+        README : The file you are reading
+        obj : directory for object files
+        UTIL : directory for sac fortran function calls (i.e. wsac and rsac)
+        src : directory for source code
+        TODO : contains list of things todo
