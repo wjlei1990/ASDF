@@ -8,7 +8,7 @@ subroutine define_asdf_variables (adios_group, adios_groupsize)
   use asdf_vars
   implicit none
 
-  integer :: adios_err, stat, nerr, irec
+  integer :: adios_err, stat, nerr, irec, length
   integer(kind=8) :: varid
   integer(kind=8),intent(inout) :: adios_group, adios_groupsize
 
@@ -77,7 +77,8 @@ subroutine define_asdf_variables (adios_group, adios_groupsize)
     if (stat /= 0) exit
     station_path = trim(trim(DATA_DIR)//"/StationXML/"//station)
     open(6, file=station_path, status='old')
-    inquire(unit=6, size=StationXML_size(irec))
+    inquire(unit=6, size=length)
+    StationXML_size(irec) = length
     close(6)
     call adios_define_var (adios_group, trim(station), "", 9, "", "", "", varid)
     adios_groupsize = adios_groupsize + StationXML_size(irec)
@@ -94,19 +95,19 @@ end subroutine define_asdf_variables
 !! \param my_adios_group Name of the group
 !! \param sac_type Distinguishes between observed and synthetic data
 
-subroutine write_asdf_variables (adios_handle)
+subroutine write_asdf_variables (adios_handle, comm)
 
   use adios_write_mod
   use asdf_vars
   implicit none
 
   integer                      :: adios_err, i, nerr, stat, irec, length
-  integer(kind=8),intent(in)   :: adios_handle
+  integer,intent(in)           :: comm
+  integer(kind=8),intent(inout):: adios_handle
 
   character(len=100)           :: waveform, station
   character(len=200)           :: command, station_path, waveform_path
   character(len=QuakeML_size)  :: QuakeML
-  character(len=500000)        :: StationXML
   character(len=:), allocatable :: StationXML_string
   
   real, dimension(NDATAMAX)    :: displseries
@@ -143,14 +144,15 @@ subroutine write_asdf_variables (adios_handle)
     length = StationXML_size(irec)
     allocate(character(length) :: StationXML_string)
     station_path = trim(trim(DATA_DIR)//"/StationXML/"//station)
-    open(25, file=station_path, status='old', &
+    open(25, file=station_path, status='old', action="read",&
         recl=StationXML_size(irec), form='unformatted', access='direct')
     read(25, rec=1) StationXML_string
-    StationXML = StationXML_String
+    print *, StationXML_string
+    call adios_write (adios_handle, trim(station), trim(StationXML_string), adios_err)
     close(25)
-    call adios_write(adios_handle, trim(station), trim(StationXML), adios_err)
     irec = irec + 1
     deallocate(StationXML_string)
+    if (irec == 5) exit
   enddo
   close(20)
 

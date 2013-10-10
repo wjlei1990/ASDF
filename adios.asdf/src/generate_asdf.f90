@@ -20,7 +20,7 @@ program generate_asdf
   call MPI_Comm_size (comm, nproc, ierr)
 
   call adios_init_noxml (comm)
-  call adios_allocate_buffer (10000, adios_err)
+  call adios_allocate_buffer (500, adios_err)
 
   call adios_declare_group (adios_group, "EVENTS", "", 1, adios_err)
   call adios_select_method (adios_group, "MPI", "", "", adios_err)
@@ -30,7 +30,7 @@ program generate_asdf
 
   call adios_open (adios_handle, "EVENTS", ASDF_FILE, "w", comm, adios_err)
   call adios_group_size (adios_handle, adios_groupsize, adios_totalsize, adios_err)
-  call write_asdf_variables (adios_handle)
+  call write_asdf_variables (adios_handle, comm)
   call adios_close (adios_handle, adios_err)
 
   call MPI_Barrier (comm, ierr)
