@@ -18,7 +18,10 @@ import warnings
 import sys
 
 
-FORMAT_VERSION = "0.0.1a"
+FORMAT_NAME = "SDF"
+FORMAT_VERSION = "0.0.1b"
+
+
 # List all compression options.
 COMPRESSIONS = {
     None: (None, None),
@@ -38,6 +41,145 @@ COMPRESSIONS = {
     "szip-nn-8": ("szip", ("nn", 8)),
     "szip-nn-10": ("szip", ("nn", 10))
     }
+
+
+class SDFException(Exception):
+    """
+    Generic exception for the Python SDF implementation.
+    """
+    pass
+
+
+class SDFWarnings(UserWarning):
+    """
+    Generic SDF warning.
+    """
+    pass
+
+
+class SDFDataSet(object):
+    """
+    DataSet object holding
+    """
+    def __init__(self, file_object, compression=None):
+        """
+        :type file_object: filename or open h5py object.
+        :param file_object: The filename or object to be written to.
+        :type compression: str, optional
+        :param compression: The compression to use. Defaults to 'szip-nn-10'
+            which yielded good results in the past. Will only be applied to
+            newly added data sets. Existing ones are not touched.
+        """
+        if compression not in COMPRESSIONS:
+            msg = "Unknown compressions '%s'. Available compressions: \n\t%s" \
+                % (compression, "\n\t".join(sorted(
+                [str(i) for i in COMPRESSIONS.keys()])))
+            raise Exception(msg)
+        self.__compression = COMPRESSIONS[compression]
+
+        # Open file or take an already open file object.
+        if isinstance(file_object, h5py.File):
+            self.__file = file_object
+        else:
+            self.__file = h5py.File(file_object, "a")
+
+        if "file_format" in self.__file.attrs:
+            if self.__file.attrs["file_format"] != FORMAT_NAME:
+                # Cleanup and raise.
+                self.__del__()
+                msg = "Not a '%s' file." % FORMAT_NAME
+                raise SDFException(msg)
+            if "sdf_format_version" not in self.__file.attrs:
+                msg = ("No file format version given for file '%s'. The function "
+                       "will continue but the result is undefined." %
+                       self.__file.filename)
+                warnings.warn(msg, SDFWarnings)
+            elif self.__file.attrs["sdf_format_version"] != FORMAT_VERSION:
+                msg = ("The file '%s' has version number '%s'. The reader "
+                       "expects version '%s'. The function will continue but "
+                       "the result is undefined." % (
+                    self.__file.filename,
+                    self.__file.attrs["sdf_format_version"],
+                    FORMAT_VERSION))
+                warnings.warn(msg, SDFWarnings)
+        else:
+            self.__file.attrs["file_format"] = FORMAT_NAME
+            self.__file.attrs["file_format_version"] = FORMAT_VERSION
+
+        # Create the waveform and provenance groups.
+        if not "waveforms" in self.__file:
+            self.__file.create_group("waveforms")
+        self.__waveforms = self.__file["waveforms"]
+        if not "provenance" in self.__file:
+            self.__file.create_group("provenance")
+        self.__provenance = self.__file["provenance"]
+
+
+    def __del__(self):
+        """
+        Attempts to close the HDF5 file.
+        """
+        try:
+            self.__file.close()
+        except:
+            pass
+
+
+    def add_waveform_file(self, waveform, tag):
+        """
+        Adds one or more waveforms to the file.
+
+        :param waveform: The waveform to add. Can either be an ObsPy Stream or
+            Trace object or something ObsPy can read.
+        :type tag: String
+        :param tag: The tag that will be given to all waveform files. It is
+            mandatory for all traces and facilitates identification of the data
+            within one SDF volume.
+        """
+        # The next function expects some kind of iterable that yields traces.
+        if isinstance(waveform, obspy.Trace):
+            waveform = [waveform]
+        elif isinstance(waveform, obspy.Stream):
+            pass
+        # Delegate to ObsPy's format/input detection.
+        else:
+            waveform = obspy.read(waveform)
+
+        # Actually add the data.
+        for trace in waveform:
+            station_name = "%s.%s" % (trace.stats.network, trace.stats.station)
+            if not station_name in self.__waveforms:
+                self.__waveforms.create_group(station_name)
+            station_group = self.__waveforms[station_name]
+
+            # Generate the name of the data within its station folder.
+            data_name = "{net}.{sta}.{loc}.{cha}__{start}__{end}__{tag}".format(
+                net=trace.stats.network,
+                sta=trace.stats.station,
+                loc=trace.stats.location,
+                cha=trace.stats.channel,
+                start=trace.stats.starttime.strftime("%Y-%m-%dT%H:%M:%S"),
+                end=trace.stats.endtime.strftime("%Y-%m-%dT%H:%M:%S"),
+                tag=tag)
+            if data_name in station_group:
+                msg = "Data '%s' already exists in file. Will not be added!" % \
+                    data_name
+                warnings.warn(msg, SDFWarnings)
+                continue
+            # Actually add the data.
+            station_group.create_dataset(
+                data_name, data=trace.data, compression=self.__compression[0],
+                compression_opts=self.__compression[1], fletcher32=True)
+
+
+
+    def add_stationxml(self, stationxml):
+        pass
+
+    def add_quakeml(self, quakeml):
+        pass
+
+
 
 
 def _generate_unique_name(station_name, starttime, endtime, existing_names,
