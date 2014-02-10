@@ -10,7 +10,9 @@ Prototype implementation for a new file format using Python and ObsPy.
     (http://www.gnu.org/copyleft/lesser.html)
 """
 import argparse
+import copy
 import h5py
+import io
 import numpy as np
 import obspy
 import os
@@ -94,7 +96,7 @@ class SDFDataSet(object):
                        "will continue but the result is undefined." %
                        self.__file.filename)
                 warnings.warn(msg, SDFWarnings)
-            elif self.__file.attrs["sdf_format_version"] != FORMAT_VERSION:
+            elif self.__file.attrs["sdf_format_version"] != self.__file.attrs:
                 msg = ("The file '%s' has version number '%s'. The reader "
                        "expects version '%s'. The function will continue but "
                        "the result is undefined." % (
@@ -107,12 +109,12 @@ class SDFDataSet(object):
             self.__file.attrs["file_format_version"] = FORMAT_VERSION
 
         # Create the waveform and provenance groups.
-        if not "waveforms" in self.__file:
-            self.__file.create_group("waveforms")
-        self.__waveforms = self.__file["waveforms"]
-        if not "provenance" in self.__file:
-            self.__file.create_group("provenance")
-        self.__provenance = self.__file["provenance"]
+        if not "Waveforms" in self.__file:
+            self.__file.create_group("Waveforms")
+        self.__waveforms = self.__file["Waveforms"]
+        if not "Provenance" in self.__file:
+            self.__file.create_group("Provenance")
+        self.__provenance = self.__file["Provenance"]
 
 
     def __del__(self):
@@ -123,6 +125,15 @@ class SDFDataSet(object):
             self.__file.close()
         except:
             pass
+
+    def __get_station_group(self, network_code, station_code):
+        """
+        Helper function.
+        """
+        station_name = "%s.%s" % (network_code, station_code)
+        if not station_name in self.__waveforms:
+            self.__waveforms.create_group(station_name)
+        return self.__waveforms[station_name]
 
 
     def add_waveform_file(self, waveform, tag):
@@ -147,11 +158,8 @@ class SDFDataSet(object):
 
         # Actually add the data.
         for trace in waveform:
-            station_name = "%s.%s" % (trace.stats.network, trace.stats.station)
-            if not station_name in self.__waveforms:
-                self.__waveforms.create_group(station_name)
-            station_group = self.__waveforms[station_name]
-
+            station_group = self.__get_station_group(trace.stats.network,
+                                                     trace.stats.station)
             # Generate the name of the data within its station folder.
             data_name = "{net}.{sta}.{loc}.{cha}__{start}__{end}__{tag}".format(
                 net=trace.stats.network,
@@ -171,15 +179,61 @@ class SDFDataSet(object):
                 data_name, data=trace.data, compression=self.__compression[0],
                 compression_opts=self.__compression[1], fletcher32=True)
 
-
-
     def add_stationxml(self, stationxml):
-        pass
+        """
+        """
+        if isinstance(stationxml, obspy.station.Inventory):
+            pass
+        else:
+            stationxml = obspy.read_inventory(stationxml, format="stationxml")
+
+        for network in stationxml:
+            network_code = network.code
+            for station in network:
+                station_code = station.code
+                station_group = self.__get_station_group(network_code,
+                                                         station_code)
+                # Get any already existing StationXML file. This will always
+                # only contain a single station!
+                if "StationXML" in station_group:
+                    existing_station_xml = obspy.read_inventory(
+                        io.BytesIO(
+                            station_group["StationXML"].value.tostring()),
+                        format="stationxml")
+                    # Only exactly one station acceptable.
+                    if len(existing_station_xml.networks) != 1 or  \
+                            len(existing_station_xml.networks[0].stations) \
+                            != 1:
+                        msg = ("The existing StationXML file for station "
+                               "'%s.%s' does not contain exactly one station!"
+                               % (network_code, station_code))
+                        raise SDFException(msg)
+                    existing_channels = \
+                        existing_station_xml.networks[0].station[0]
+                    # XXX: Need better checks for duplicates...
+                    for channel in station.channels:
+                        if channel in existing_channels:
+                            continue
+                        existing_channels.append(channel)
+                    new_station_xml = existing_station_xml
+                else:
+                    # Create a shallow copy of the network and add the channels
+                    # to only have the channels of this station.
+                    new_station_xml = copy.copy(stationxml)
+                    new_station_xml.networks = [network]
+                    new_station_xml.networks[0].stations = [station]
+                # Finally write it.
+                temp = io.BytesIO()
+                new_station_xml.write(temp, format="stationxml")
+                temp.seek(0, 0)
+                station_group.create_dataset("StationXML",
+                                             data=np.void(temp.read()),
+                                             fletcher32=True)
+                temp.close()
+
 
     def add_quakeml(self, quakeml):
         pass
-
-
 
 
 def _generate_unique_name(station_name, starttime, endtime, existing_names,
