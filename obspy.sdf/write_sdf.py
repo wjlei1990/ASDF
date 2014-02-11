@@ -103,11 +103,14 @@ class WaveformAccessor(object):
         self.__data_set = weakref.ref(sdf_data_set)
 
     def __getattr__(self, item):
-        __station = self.__data_set()._waveform_group[self.__station_name]
-        keys = [_i for _i in __station.iterkeys()
-            if _i.endswith("__" + item)]
-        traces = [self.__data_set().get_waveform(_i) for _i in keys]
-        return obspy.Stream(traces=traces)
+        if item != "StationXML":
+            __station = self.__data_set()._waveform_group[self.__station_name]
+            keys = [_i for _i in __station.iterkeys()
+                if _i.endswith("__" + item)]
+            traces = [self.__data_set().get_waveform(_i) for _i in keys]
+            return obspy.Stream(traces=traces)
+        else:
+            return self.__data_set().get_station(self.__station_name)
 
     def __dir__(self):
         __station = self.__data_set()._waveform_group[self.__station_name]
@@ -199,6 +202,15 @@ class SDFDataSet(object):
         tr.stats.location = location
         tr.stats.channel = channel
         return tr
+
+    def get_station(self, station_name):
+        """
+        Retrieves the specified StationXML as an obspy.station.Inventory object.
+        """
+        data = self.__file["Waveforms"][station_name]["StationXML"]
+        inv = obspy.read_inventory(io.BytesIO(data.value.tostring()),
+            format="stationxml")
+        return inv
 
     def __del__(self):
         """
