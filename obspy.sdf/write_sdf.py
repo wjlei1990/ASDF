@@ -192,6 +192,8 @@ class SDFDataSet(object):
         data = self.__file["Waveforms"]["%s.%s" % (network, station)][
             waveform_name]
         tr = obspy.Trace(data=data.value)
+        tr.stats.starttime = obspy.UTCDateTime(data.attrs["starttime"])
+        tr.stats.sampling_rate = data.attrs["sampling_rate"]
         tr.stats.network = network
         tr.stats.station = station
         tr.stats.location = location
