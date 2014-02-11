@@ -42,7 +42,7 @@ COMPRESSIONS = {
     "szip-ec-10": ("szip", ("ec", 10)),
     "szip-nn-8": ("szip", ("nn", 8)),
     "szip-nn-10": ("szip", ("nn", 10))
-    }
+}
 
 
 class SDFException(Exception):
@@ -91,17 +91,17 @@ class SDFDataSet(object):
                 self.__del__()
                 msg = "Not a '%s' file." % FORMAT_NAME
                 raise SDFException(msg)
-            if "sdf_format_version" not in self.__file.attrs:
+            if "file_format_version" not in self.__file.attrs:
                 msg = ("No file format version given for file '%s'. The function "
                        "will continue but the result is undefined." %
                        self.__file.filename)
                 warnings.warn(msg, SDFWarnings)
-            elif self.__file.attrs["sdf_format_version"] != self.__file.attrs:
+            elif self.__file.attrs["file_format_version"] != FORMAT_VERSION:
                 msg = ("The file '%s' has version number '%s'. The reader "
                        "expects version '%s'. The function will continue but "
                        "the result is undefined." % (
                     self.__file.filename,
-                    self.__file.attrs["sdf_format_version"],
+                    self.__file.attrs["file_format_version"],
                     FORMAT_VERSION))
                 warnings.warn(msg, SDFWarnings)
         else:
@@ -174,10 +174,12 @@ class SDFDataSet(object):
                     data_name
                 warnings.warn(msg, SDFWarnings)
                 continue
-            # Actually add the data.
+            # Actually add the data. Use maxshape to create an extendable data
+            # set.
             station_group.create_dataset(
                 data_name, data=trace.data, compression=self.__compression[0],
-                compression_opts=self.__compression[1], fletcher32=True)
+                compression_opts=self.__compression[1], fletcher32=True,
+                maxshape=(None,))
 
     def add_stationxml(self, stationxml):
         """
@@ -209,27 +211,48 @@ class SDFDataSet(object):
                                % (network_code, station_code))
                         raise SDFException(msg)
                     existing_channels = \
-                        existing_station_xml.networks[0].station[0]
+                        existing_station_xml.networks[0].stations[0].channels
                     # XXX: Need better checks for duplicates...
+                    found_new_channel = False
+                    chan_essence = [(_i.code, _i.location_code, _i.start_date,
+                                     _i.end_date) for _i in existing_channels]
                     for channel in station.channels:
-                        if channel in existing_channels:
+                        essence = (channel.code, channel.location_code,
+                                   channel.start_date, channel.end_date)
+                        if essence in chan_essence:
                             continue
-                        existing_channels.append(channel)
-                    new_station_xml = existing_station_xml
+                        existing_channels.appends(channel)
+                        found_new_channel = True
+
+                    # Only write if something actually changed.
+                    if found_new_channel is True:
+                        temp = io.BytesIO()
+                        existing_station_xml.write(temp, format="stationxml")
+                        temp.seek(0, 0)
+                        data = np.array(list(temp.read()), dtype="|S1")
+                        data.dtype = np.int8
+                        temp.close()
+                        # maxshape takes care to create an extendable data set.
+                        station_group["StationXML"].resize((len(data.data),))
+                        station_group["StationXML"][:] = data
                 else:
                     # Create a shallow copy of the network and add the channels
                     # to only have the channels of this station.
                     new_station_xml = copy.copy(stationxml)
                     new_station_xml.networks = [network]
                     new_station_xml.networks[0].stations = [station]
-                # Finally write it.
-                temp = io.BytesIO()
-                new_station_xml.write(temp, format="stationxml")
-                temp.seek(0, 0)
-                station_group.create_dataset("StationXML",
-                                             data=np.void(temp.read()),
-                                             fletcher32=True)
-                temp.close()
+                    # Finally write it.
+                    temp = io.BytesIO()
+                    new_station_xml.write(temp, format="stationxml")
+                    temp.seek(0, 0)
+                    data = np.array(list(temp.read()), dtype="|S1")
+                    data.dtype = np.int8
+                    temp.close()
+                    # maxshape takes care to create an extendable data set.
+                    station_group.create_dataset(
+                        "StationXML", data=data,
+                        maxshape=(None,),
+                        fletcher32=True)
 
 
     def add_quakeml(self, quakeml):
