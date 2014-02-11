@@ -4,12 +4,11 @@
 Prototype implementation for a new file format using Python and ObsPy.
 
 :copyright:
-    Lion Krischer (krischer@geophysik.uni-muenchen.de), 2013
+    Lion Krischer (krischer@geophysik.uni-muenchen.de), 2013-2014
 :license:
     GNU Lesser General Public License, Version 3
     (http://www.gnu.org/copyleft/lesser.html)
 """
-import argparse
 import copy
 import h5py
 import io
@@ -17,7 +16,7 @@ import numpy as np
 import obspy
 import os
 import warnings
-import sys
+import weakref
 
 
 FORMAT_NAME = "SDF"
@@ -76,19 +75,49 @@ class StationAccessor(object):
     """
     Helper class to facilitate access to the waveforms and stations.
     """
-    def __init__(self, waveform_group):
-        self.__waveforms = waveform_group
+    def __init__(self, sdf_data_set):
+        # Use weak references to not have any dangling references to the HDF5
+        # file around.
+        self.__data_set = weakref.ref(sdf_data_set)
 
 
     def __getattr__(self, item):
-        if item.replace("_", ".") not in self.__waveforms:
+        __waveforms = self.__data_set()._waveform_group
+        if item.replace("_", ".") not in __waveforms:
             raise AttributeError
-        item = self.__waveforms[item.replace("_", ".")]
-        return item
+        return WaveformAccessor(item.replace("_", "."), self.__data_set())
 
     def __dir__(self):
-        return [_i.replace(".", "_") for _i in self.__waveforms.iterkeys()]
+        __waveforms = self.__data_set()._waveform_group
+        return [_i.replace(".", "_") for _i in __waveforms.iterkeys()]
 
+
+class WaveformAccessor(object):
+    """
+    Helper class facilitating access to the actual waveforms and stations.
+    """
+    def __init__(self, station_name, sdf_data_set):
+        # Use weak references to not have any dangling references to the HDF5
+        # file around.
+        self.__station_name = station_name
+        self.__data_set = weakref.ref(sdf_data_set)
+
+    def __getattr__(self, item):
+        __station = self.__data_set()._waveform_group[self.__station_name]
+        keys = [_i for _i in __station.iterkeys()
+            if _i.endswith("__" + item)]
+        traces = [self.__data_set().get_waveform(_i) for _i in keys]
+        return obspy.Stream(traces=traces)
+
+    def __dir__(self):
+        __station = self.__data_set()._waveform_group[self.__station_name]
+        directory = []
+        if "StationXML" in __station:
+            directory.append("StationXML")
+        directory.extend([_i.split("__")[-1]
+                          for _i in __station.iterkeys()
+                          if _i != "StationXML"])
+        return directory
 
 
 class SDFDataSet(object):
@@ -148,8 +177,26 @@ class SDFDataSet(object):
             self.__file.create_group("Provenance")
         self.__provenance = self.__file["Provenance"]
 
-        self.waveforms = StationAccessor(self.__file)
+        self.waveforms = StationAccessor(self)
 
+    @property
+    def _waveform_group(self):
+        return self.__file["Waveforms"]
+
+    def get_waveform(self, waveform_name):
+        """
+        Retrieves the waveform for a certain tag name as a Trace object.
+        """
+        network, station, location, channel = waveform_name.split(".")[:4]
+        channel = channel[:channel.find("__")]
+        data = self.__file["Waveforms"]["%s.%s" % (network, station)][
+            waveform_name]
+        tr = obspy.Trace(data=data.value)
+        tr.stats.network = network
+        tr.stats.station = station
+        tr.stats.location = location
+        tr.stats.channel = channel
+        return tr
 
     def __del__(self):
         """
@@ -226,6 +273,10 @@ class SDFDataSet(object):
                 data_name, data=trace.data, compression=self.__compression[0],
                 compression_opts=self.__compression[1], fletcher32=True,
                 maxshape=(None,))
+            station_group[data_name].attrs["starttime"] = \
+                trace.stats.starttime.timestamp
+            station_group[data_name].attrs["sampling_rate"] = \
+                trace.stats.sampling_rate
 
     def add_stationxml(self, stationxml):
         """
