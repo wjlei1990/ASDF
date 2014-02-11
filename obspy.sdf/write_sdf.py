@@ -367,3 +367,9 @@ class SDFDataSet(object):
 
     def add_quakeml(self, quakeml):
         pass
+
+    def process(self, process_function, output_filename):
+        new_data_set = SDFDataSet(output_filename)
+        stations = self.__file["Waveforms"].keys()
+        length = len(stations)
+        for _i
