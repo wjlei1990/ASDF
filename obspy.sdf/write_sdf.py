@@ -45,6 +45,19 @@ COMPRESSIONS = {
 }
 
 
+def sizeof_fmt(num):
+    """
+    Handy formatting for human readable filesize.
+
+    From http://stackoverflow.com/a/1094933/1657047
+    """
+    for x in ["bytes", "KB", "MB", "GB"]:
+        if num < 1024.0 and num > -1024.0:
+            return "%3.1f %s" % (num, x)
+        num /= 1024.0
+    return "%3.1f %s" % (num, "TB")
+
+
 class SDFException(Exception):
     """
     Generic exception for the Python SDF implementation.
@@ -125,6 +138,18 @@ class SDFDataSet(object):
             self.__file.close()
         except:
             pass
+
+    def __str__(self):
+        filesize = sizeof_fmt(os.path.getsize(self.__file.filename))
+        ret = "{format} file: '{filename}' ({size})".format(
+            format=FORMAT_NAME,
+            filename=self.__file.filename,
+            size=filesize
+        )
+        ret += "\n\tContains data from {len} stations.".format(
+            len=len(self.__file["Waveforms"])
+        )
+        return ret
 
     def __get_station_group(self, network_code, station_code):
         """
@@ -256,4 +281,3 @@ class SDFDataSet(object):
 
     def add_quakeml(self, quakeml):
         pass
-
