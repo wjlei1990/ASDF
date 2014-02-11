@@ -72,6 +72,25 @@ class SDFWarnings(UserWarning):
     pass
 
 
+class StationAccessor(object):
+    """
+    Helper class to facilitate access to the waveforms and stations.
+    """
+    def __init__(self, waveform_group):
+        self.__waveforms = waveform_group
+
+
+    def __getattr__(self, item):
+        if item.replace("_", ".") not in self.__waveforms:
+            raise AttributeError
+        item = self.__waveforms[item.replace("_", ".")]
+        return item
+
+    def __dir__(self):
+        return [_i.replace(".", "_") for _i in self.__waveforms.iterkeys()]
+
+
+
 class SDFDataSet(object):
     """
     DataSet object holding
@@ -128,6 +147,8 @@ class SDFDataSet(object):
         if not "Provenance" in self.__file:
             self.__file.create_group("Provenance")
         self.__provenance = self.__file["Provenance"]
+
+        self.waveforms = StationAccessor(self.__file)
 
 
     def __del__(self):
