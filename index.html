@@ -1,0 +1,199 @@
+
+
+<!DOCTYPE html>
+<!--[if IE 8]><html class="no-js lt-ie9" lang="en" > <![endif]-->
+<!--[if gt IE 8]><!--> <html class="no-js" lang="en" > <!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  
+  <title>An Adaptable and Modern Seismic Data Format &mdash; SDF 0.0.1a documentation</title>
+  
+
+  
+  
+
+  
+  <link href='https://fonts.googleapis.com/css?family=Lato:400,700|Roboto+Slab:400,700|Inconsolata:400,700' rel='stylesheet' type='text/css'>
+
+  
+  
+
+    <script type="text/javascript">
+      var DOCUMENTATION_OPTIONS = {
+        URL_ROOT:'./',
+        VERSION:'0.0.1a',
+        COLLAPSE_INDEX:false,
+        FILE_SUFFIX:'.html',
+        HAS_SOURCE:  true
+      };
+    </script>
+      <script type="text/javascript" src="_static/jquery.js"></script>
+      <script type="text/javascript" src="_static/underscore.js"></script>
+      <script type="text/javascript" src="_static/doctools.js"></script>
+      <script type="text/javascript" src="http://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML"></script>
+
+    
+
+  
+
+  
+  
+    <link rel="stylesheet" href="_static/css/theme.css" type="text/css" />
+    <script type="text/javascript" src="_static/js/theme.js"></script>
+  
+
+  
+    <link rel="top" title="SDF 0.0.1a documentation" href="#"/>
+        <link rel="next" title="Introduction" href="introduction.html"/> 
+
+  <script src="//cdnjs.cloudflare.com/ajax/libs/modernizr/2.6.2/modernizr.min.js"></script>
+
+</head>
+
+<body class="wy-body-for-nav">
+
+  <div class="wy-grid-for-nav">
+
+    
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-nav-search">
+        <a href="#" class="icon icon-home"> SDF</a>
+        <form class="wy-form" action="search.html" method="get">
+  <input type="text" name="q" placeholder="Search docs" />
+  <input type="hidden" name="check_keywords" value="yes" />
+  <input type="hidden" name="area" value="default" />
+</form>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix">
+        
+        
+            <ul>
+<li class="toctree-l1"><a class="reference internal" href="introduction.html">Introduction</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="introduction.html#why-introduce-a-new-seismic-data-format">Why introduce a new seismic data format?</a></li>
+<li class="toctree-l2"><a class="reference internal" href="introduction.html#the-container">The container</a></li>
+<li class="toctree-l2"><a class="reference internal" href="introduction.html#the-container-layout">The container layout</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="technical_details.html">Technical Details</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="technical_details.html#internal-data-layout">Internal Data Layout</a></li>
+<li class="toctree-l2"><a class="reference internal" href="technical_details.html#seed-structure-layout">SEED structure layout</a></li>
+<li class="toctree-l2"><a class="reference internal" href="technical_details.html#diagram">Diagram</a></li>
+<li class="toctree-l2"><a class="reference internal" href="technical_details.html#description-of-processing-elements">Description of Processing Elements</a></li>
+<li class="toctree-l2"><a class="reference internal" href="technical_details.html#potential-shortcomings">Potential Shortcomings</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="implementations.html">Implementations</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="implementations.html#adios-and-fortran">ADIOS and Fortran</a></li>
+<li class="toctree-l2"><a class="reference internal" href="implementations.html#hdf5-and-python">HDF5 and Python</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="use_cases.html">Use Cases</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="use_cases.html#earthquake-data">Earthquake data</a></li>
+<li class="toctree-l2"><a class="reference internal" href="use_cases.html#ambient-noise-data">Ambient Noise Data</a></li>
+<li class="toctree-l2"><a class="reference internal" href="use_cases.html#exploration-data">Exploration Data</a></li>
+</ul>
+</li>
+</ul>
+
+        
+      </div>
+      &nbsp;
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+
+      
+      <nav class="wy-nav-top">
+        <i data-toggle="wy-nav-top" class="icon icon-reorder"></i>
+        <a href="/">SDF</a>
+      </nav>
+
+
+      
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <ul class="wy-breadcrumbs">
+  <li><a href="#">Docs</a> &raquo;</li>
+  <li><a href="">An Adaptable and Modern Seismic Data Format</a></li>
+  
+</ul>
+<hr/>
+
+          
+  <div class="section" id="an-adaptable-and-modern-seismic-data-format">
+<h1>An Adaptable and Modern Seismic Data Format<a class="headerlink" href="#an-adaptable-and-modern-seismic-data-format" title="Permalink to this headline">¶</a></h1>
+<p>This document presents the current status of an attempt to develop and define a
+new data format for modern seismology. It is currently divided into four parts:</p>
+<ol class="arabic simple">
+<li>The introduction demonstrates the necessity of a new format and gives a
+high-level overview of the format and the ideas behind it.</li>
+<li>The next section deals with the technical details and is still very much
+subject to even fundamental changes.</li>
+<li>The third part present two implementations of the format. One based on ADIOS
+and Fortran and the other implemented in Python with the help of the ObsPy
+framework and the HDF5 container format.</li>
+<li>The last part displays some use cases to demonstrate the wide range of
+possible uses.</li>
+</ol>
+<div class="toctree-wrapper compound">
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="introduction.html">Introduction</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="introduction.html#why-introduce-a-new-seismic-data-format">Why introduce a new seismic data format?</a></li>
+<li class="toctree-l2"><a class="reference internal" href="introduction.html#the-container">The container</a></li>
+<li class="toctree-l2"><a class="reference internal" href="introduction.html#the-container-layout">The container layout</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="technical_details.html">Technical Details</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="technical_details.html#internal-data-layout">Internal Data Layout</a></li>
+<li class="toctree-l2"><a class="reference internal" href="technical_details.html#seed-structure-layout">SEED structure layout</a></li>
+<li class="toctree-l2"><a class="reference internal" href="technical_details.html#diagram">Diagram</a></li>
+<li class="toctree-l2"><a class="reference internal" href="technical_details.html#description-of-processing-elements">Description of Processing Elements</a></li>
+<li class="toctree-l2"><a class="reference internal" href="technical_details.html#potential-shortcomings">Potential Shortcomings</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="implementations.html">Implementations</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="implementations.html#adios-and-fortran">ADIOS and Fortran</a></li>
+<li class="toctree-l2"><a class="reference internal" href="implementations.html#hdf5-and-python">HDF5 and Python</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="use_cases.html">Use Cases</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="use_cases.html#earthquake-data">Earthquake data</a></li>
+<li class="toctree-l2"><a class="reference internal" href="use_cases.html#ambient-noise-data">Ambient Noise Data</a></li>
+<li class="toctree-l2"><a class="reference internal" href="use_cases.html#exploration-data">Exploration Data</a></li>
+</ul>
+</li>
+</ul>
+</div>
+</div>
+
+
+          <footer>
+  
+    <div class="rst-footer-buttons">
+      
+        <a href="introduction.html" class="btn btn-neutral float-right" title="Introduction"/>Next <span class="icon icon-circle-arrow-right"></span></a>
+      
+      
+    </div>
+  
+
+  <hr/>
+
+  <p>
+      &copy; Copyright 2014, Lion Krischer, James Smith, Jeroen Tromp.
+  </p>
+
+  <a href="https://www.github.com/snide/sphinx_rtd_theme">Sphinx theme</a> provided by <a href="http://readthedocs.org">Read the Docs</a>
+</footer>
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+  
+
+</body>
+</html>
