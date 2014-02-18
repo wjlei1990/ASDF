@@ -1,5 +1,7 @@
 # SDF
 
+[Documentation](http://sdf.readthedocs.org)
+
 ### Building the Documentation
 
 The documentation is created with sphinx and the read the docs theme. Install
