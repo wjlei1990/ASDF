@@ -97,7 +97,7 @@ class SeisProvGraph(object):
 
         return new_entity
 
-    def plot(self):
+    def plot(self, filename=None):
         # Collect already plotted instance here to avoid circular runs in the
         # graph.
         graph = pydot.Dot("graphname", graph_type="digraph", resolution=150,
@@ -133,13 +133,26 @@ class SeisProvGraph(object):
                 **edge.get_style())
             graph.add_edge(this_connection)
 
-        import io
-        from PIL import Image
 
-        temp = io.BytesIO(graph.create_png())
+        if filename is None:
+            import io
+            from PIL import Image
 
-        Image.open(temp).show()
-        temp.close()
+            temp = io.BytesIO(graph.create_png())
+
+            Image.open(temp).show()
+            temp.close()
+        elif filename.endswith(".png"):
+            with open(filename, "wb") as fh:
+                fh.write(graph.create_png())
+        elif filename.endswith(".svg"):
+            with open(filename, "wb") as fh:
+                fh.write(graph.create_svg())
+        elif filename.endswith(".pdf"):
+            with open(filename, "wb") as fh:
+                fh.write(graph.create_pdf())
+        else:
+            raise NotImplementedError
 
     def toXML(self):
         xml_elements = {}
