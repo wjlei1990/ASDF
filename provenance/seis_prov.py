@@ -183,7 +183,8 @@ class SeisProvGraph(object):
             destination_elem.set(_get_tag("ref", NS_PROV), edge.destination.id)
 
 
-        print(etree.tostring(doc, pretty_print=True))
+        print(etree.tostring(doc, pretty_print=True, xml_declaration=True,
+                             encoding="UTF-8"))
 
 
 class Connection(object):
@@ -415,6 +416,43 @@ class WaveformDataEntity(Entity):
         return _get_tag("waveformDataEntity", NS_SEIS_PROV)
 
 
+class ConfigFileEntity(Entity):
+    def __init__(self, filename, content=None, id=None):
+        if id is None:
+            id = "config_file_%s" % str(uuid4())
+        super(ConfigFileEntity, self).__init__(id, label="Config File")
+        self.filename = filename
+        self.content = content
+
+    def _get_xml_tag(self):
+        return _get_tag("configFile", NS_SEIS_PROV)
+
+    def _get_info(self):
+        info = collections.OrderedDict()
+        info["filename"] = (self.filename, NS_SEIS_PROV)
+        if self.content:
+            info["fileContent"] = (self.content[:20] + "...", NS_SEIS_PROV)
+        return info
+
+
+class EarthModelEntity(Entity):
+    def __init__(self, model_name, description=None, id=None):
+        if id is None:
+            id = "earth_model_%s_%s" % (model_name, str(uuid4()))
+        super(EarthModelEntity, self).__init__(id, label="Earth Model")
+        self.model_name = model_name
+        self.description = description
+
+    def _get_xml_tag(self):
+        return _get_tag("earthModel", NS_SEIS_PROV)
+
+    def _get_info(self):
+        info = collections.OrderedDict()
+        info["modelName"] = (self.model_name, NS_SEIS_PROV)
+        info["description"] = (self.description, NS_SEIS_PROV)
+        return info
+
+
 def plot(entity):
     """
     Plots all connection coming in here.
@@ -482,36 +520,99 @@ def plot_entity(entity, graph, pydot_nodes):
 
 
 if __name__ == "__main__":
+    # # Initialize a new graph.
+    # graph = SeisProvGraph()
+    # # Create a person, a provenance agent.
+    # lion = Person(name="Lion Krischer",
+    #               email="krischer[at]geophysik.uni-muenchen.de",
+    #               institution="LMU")
+    # graph.add_node(lion)
+    #
+    # # Create a software package, a provenance agent.
+    # obspy = SoftwareAgent(name="ObsPy", version="0.9.0",
+    #                       url="http://www.obspy.org")
+    # graph.add_node(obspy)
+    #
+    # # ObsPy was steered by a person.
+    # graph.create_and_add_edge(obspy, lion, "actedOnBehalfOf")
+    #
+    # data_1 = WaveformDataEntity()
+    # graph.add_node(data_1)
+    #
+    # data_2 = graph.process_waveform_entity(
+    #     data_1, "detrend", {"type":  "linear"}, obspy)
+    #
+    # data_3 = graph.process_waveform_entity(data_2, "lowpass_filter",
+    #                               {"type":  "Butterworth",
+    #                                "frequency": "2.0",
+    #                                "order": "2"}, obspy)
+    #
+    # data_4 = graph.process_waveform_entity(data_3, "decimate",
+    #                                        {"factor":  "4"}, obspy)
+    #
+    # graph.toXML()
+    # graph.plot()
+
     # Initialize a new graph.
     graph = SeisProvGraph()
-
     # Create a person, a provenance agent.
     lion = Person(name="Lion Krischer",
                   email="krischer[at]geophysik.uni-muenchen.de",
                   institution="LMU")
+    james = Person(name="James Smith",
+                  email="jas11[at]princeton.edu",
+                  institution="Princeton")
     graph.add_node(lion)
+    graph.add_node(james)
 
     # Create a software package, a provenance agent.
-    obspy = SoftwareAgent(name="ObsPy", version="0.9.0",
-                          url="http://www.obspy.org")
-    graph.add_node(obspy)
+    specfem = SoftwareAgent(
+        name="SPECFEM3D GLOBE", version="5.1.5",
+        url="http://geodynamics.org/cig/software/specfem3d_globe/")
+    graph.add_node(specfem)
 
-    # ObsPy was steered by a person.
-    graph.create_and_add_edge(obspy, lion, "actedOnBehalfOf")
+    graph.create_and_add_edge(specfem, lion, "actedOnBehalfOf")
 
     data_1 = WaveformDataEntity()
     graph.add_node(data_1)
 
-    data_2 = graph.process_waveform_entity(
-        data_1, "detrend", {"type":  "linear"}, obspy)
+    simulation = SeismicProcessingActivity("Waveform Simulation", {})
+    graph.add_node(simulation)
 
-    data_3 = graph.process_waveform_entity(data_2, "lowpass_filter",
-                                  {"type":  "Butterworth",
-                                   "frequency": "2.0",
-                                   "order": "2"}, obspy)
+    earth_model = EarthModelEntity(model_name="NorthAtlantic",
+                                   description="Some random model.")
 
-    data_4 = graph.process_waveform_entity(data_3, "decimate",
-                                           {"factor":  "4"}, obspy)
+    graph.add_node(earth_model)
 
-    # graph.toXML()
-    graph.plot()
+    config_file_1 = ConfigFileEntity(filename="Par_file", content="""
+PDE 2012 4 12 7 15 48.50 39.26000 41.04000 5.00000 4.7 4.7 2012-04-12T07:15:48.500000Z_4.7
+event name:      0000000
+time shift:       0.0000
+half duration:    0.0000
+latitude:       39.26000
+longitude:      41.04000
+depth:          5.00000
+Mrr:         1e+23
+Mtt:         1e+23
+Mpp:         1e+23
+Mrt:         0
+Mrp:         0
+Mtp:         0""".strip())
+    graph.add_node(config_file_1)
+    graph.create_and_add_edge(simulation, config_file_1,  "used")
+    config_file_2 = ConfigFileEntity(filename="CMTSOLUTION")
+    graph.add_node(config_file_2)
+    graph.create_and_add_edge(simulation, config_file_2,  "used")
+    config_file_3 = ConfigFileEntity(filename="STATIONS")
+    graph.add_node(config_file_3)
+    graph.create_and_add_edge(simulation, config_file_3,  "used")
+
+    graph.create_and_add_edge(earth_model, james, "wasAssociatedWith")
+
+    graph.create_and_add_edge(simulation, earth_model, "used")
+    graph.create_and_add_edge(data_1, simulation, "wasGeneratedBy")
+    graph.create_and_add_edge(simulation, specfem, "wasAssociatedWith")
+
+
+    graph.toXML()
+    graph.plot("simulation.svg")
