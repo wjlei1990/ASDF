@@ -372,4 +372,3 @@ class SDFDataSet(object):
         new_data_set = SDFDataSet(output_filename)
         stations = self.__file["Waveforms"].keys()
         length = len(stations)
-        for _i
