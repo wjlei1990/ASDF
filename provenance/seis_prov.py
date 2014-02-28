@@ -2,6 +2,7 @@ import cgi
 import collections
 from lxml import etree
 import pydot
+import re
 from uuid import uuid4
 import warnings
 
@@ -518,8 +519,83 @@ def plot_entity(entity, graph, pydot_nodes):
 
     return this_node
 
+def trace_to_graph(trace, name, email, institution):
+    if not hasattr(trace.stats, "processing"):
+        msg = "Empty processing info for the trace."
+        raise ValueError(msg)
+
+    steps = []
+    for step in trace.stats.processing:
+        software = step[:step.index(":")]
+        command = step[step.index(":") + 1:]
+        sofware, sofware_version = [_i.strip() for _i in software.split()]
+        regex = re.compile("(.*)\((.*)\)")
+        command_name, arguments = re.match(regex, command).groups()
+        arguments = arguments.split("::")
+        args = {}
+        for arg in arguments:
+            i, j = arg.split("=")
+            args[i] = j
+        steps.append((command_name, args))
+
+
+    obspy = SoftwareAgent(name=sofware, version=sofware_version,
+                          url="http://www.obspy.org")
+    person = Person(name=name, email=email, institution=institution)
+
+    graph = SeisProvGraph()
+    graph.add_node(obspy)
+    graph.add_node(person)
+    graph.create_and_add_edge(obspy, person, "actedOnBehalfOf")
+
+    data = WaveformDataEntity()
+    graph.add_node(data)
+
+    for step in steps:
+        data = graph.process_waveform_entity(data, step[0], step[1], obspy)
+
+    graph.plot()
+
+
+
+
 
 if __name__ == "__main__":
+    import obspy
+    tr = obspy.read()[0]
+    tr.detrend("linear")
+    tr.filter("lowpass", freq=2.0)
+    tr.decimate(2)
+    tr.integrate()
+
+    trace_to_graph(tr, "Lion Krischer",
+                   "krischer[at]geophysik.uni-muenchen.de",
+                   "LMU")
+    import sys
+    sys.exit()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     # # Initialize a new graph.
     # graph = SeisProvGraph()
     # # Create a person, a provenance agent.
