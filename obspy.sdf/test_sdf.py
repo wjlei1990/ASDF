@@ -1,5 +1,7 @@
-import glob
 import os
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+
+import glob
 
 from sdf_data_set import SDFDataSet
 
@@ -8,32 +10,31 @@ filename = "test_file.h5"
 
 
 data_set = SDFDataSet(filename)
-print ""
+print("")
 print data_set
-print ""
+print("")
 
 
-# def process_function(stream, inventory):
-#     stream.detrend("linear")
-#     stream.decimate(factor=5)
-#     stream.attach_response(inventory)
-#     stream.remove_response(units="velocity")
-#     stream.filter("lowpass", 2.0)
+def process_function(stream, inventory):
+    stream.detrend("linear")
+    stream.decimate(factor=5)
+    # stream.attach_response(inventory)
+    # stream.remove_response(output="VEL")
+    stream.filter("lowpass", freq=2.0)
 
 
 # Apply this to all stations. This will in the future detect if is it run in
 # an MPI environment and otherwise use os.fork to achieve parallelism.
-# data_set.process(process_function, output_filename="new.h5")
-
-from IPython.core.debugger import Tracer; Tracer(colors="linux")()
+data_set.process(process_function, output_filename="new.h5")
 
 
-print "Adding MiniSEED files"
-for file in glob.iglob(os.path.join(path, "MiniSEED", "*.mseed")):
-    print file
-    data_set.add_waveform_file(file, tag="raw_recording")
 
-print "Adding StationXML files"
-for file in glob.iglob(os.path.join(path, "StationXML", "*.xml")):
-    print file
-    data_set.add_stationxml(file)
+# print "Adding MiniSEED files"
+# for file in glob.iglob(os.path.join(path, "MiniSEED", "*.mseed")):
+#     print file
+#     data_set.add_waveform_file(file, tag="raw_recording")
+#
+# print "Adding StationXML files"
+# for file in glob.iglob(os.path.join(path, "StationXML", "*.xml")):
+#     print file
+#     data_set.add_stationxml(file)

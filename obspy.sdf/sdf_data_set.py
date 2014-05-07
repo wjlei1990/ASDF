@@ -10,17 +10,62 @@ Prototype implementation for a new file format using Python and ObsPy.
     (http://www.gnu.org/copyleft/lesser.html)
 """
 import copy
+import collections
 import h5py
 import io
+import multiprocessing
+import math
 import numpy as np
 import obspy
 import os
+from UserDict import DictMixin
 import warnings
 import weakref
+import sys
+import time
 
 
 FORMAT_NAME = "SDF"
 FORMAT_VERSION = "0.0.1b"
+
+# MPI message tags used for communication.
+MSG_TAGS = [
+    "MASTER_FORCES_WRITE",
+    "MASTER_SENDS_ITEM",
+    "WORKER_REQUESTS_ITEM",
+    "WORKER_DONE_WITH_ITEM",
+    "WORKER_REQUESTS_WRITE",
+    # Message send by the master to indicate everything has been processed.
+    # Otherwise all workers will keep looping to be able to synchronize
+    # metadata.
+    "ALL_DONE",
+]
+
+# Convert to enum like structure.
+MSG_TAGS = {msg: i  for i, msg in enumerate(MSG_TAGS)}
+
+ReceivedMessage = collections.namedtuple("ReceivedMessage", ["data"])
+
+POISON_PILL = "POISON_PILL"
+
+MAX_MEMORY_PER_WORKER_IN_MB = 10
+
+input_data_set_container = []
+output_data_set_container = []
+
+
+class SDFException(Exception):
+    """
+    Generic exception for the Python SDF implementation.
+    """
+    pass
+
+
+class SDFWarnings(UserWarning):
+    """
+    Generic SDF warning.
+    """
+    pass
 
 
 # List all compression options.
@@ -55,20 +100,6 @@ def sizeof_fmt(num):
             return "%3.1f %s" % (num, x)
         num /= 1024.0
     return "%3.1f %s" % (num, "TB")
-
-
-class SDFException(Exception):
-    """
-    Generic exception for the Python SDF implementation.
-    """
-    pass
-
-
-class SDFWarnings(UserWarning):
-    """
-    Generic SDF warning.
-    """
-    pass
 
 
 class StationAccessor(object):
@@ -196,12 +227,32 @@ class SDFDataSet(object):
             waveform_name]
         tr = obspy.Trace(data=data.value)
         tr.stats.starttime = obspy.UTCDateTime(data.attrs["starttime"])
-        tr.stats.sampling_rate = data.attrs["sampling_rate"]
+        tr.stats.sampling_rate = float(data.attrs["sampling_rate"])
         tr.stats.network = network
         tr.stats.station = station
         tr.stats.location = location
         tr.stats.channel = channel
         return tr
+
+    def get_data_for_tag(self, station_name, tag):
+        """
+        Returns the waveform and station data for the requested station and
+        tag.
+
+        :param station_name:
+        :param tag:
+        :return: tuple
+        """
+        contents = self.__file["Waveforms"][station_name].keys()
+        traces = []
+        for content in contents:
+            if content.endswith("__%s" % tag):
+                traces.append(self.get_waveform(content))
+
+        st = obspy.Stream(traces=traces)
+        inv = self.get_station(station_name)
+
+        return st, inv
 
     def get_station(self, station_name):
         """
@@ -288,9 +339,9 @@ class SDFDataSet(object):
                 compression_opts=self.__compression[1], fletcher32=True,
                 maxshape=(None,))
             station_group[data_name].attrs["starttime"] = \
-                trace.stats.starttime.timestamp
+                str(trace.stats.starttime)
             station_group[data_name].attrs["sampling_rate"] = \
-                trace.stats.sampling_rate
+                str(trace.stats.sampling_rate)
 
     def add_stationxml(self, stationxml):
         """
@@ -369,6 +420,441 @@ class SDFDataSet(object):
         pass
 
     def process(self, process_function, output_filename):
-        new_data_set = SDFDataSet(output_filename)
         stations = self.__file["Waveforms"].keys()
-        length = len(stations)
+        # Get all possible station and waveform tag combinations and let
+        # each process read the data it needs.
+        station_tags = []
+        for station in stations:
+            # Get the station and all possible tags.
+            waveforms = self.__file["Waveforms"][station].keys()
+            tags = set()
+            for waveform in waveforms:
+                if waveform == "StationXML":
+                    continue
+                tags.add(waveform.split("__")[-1])
+            for tag in tags:
+                station_tags.append((station, tag))
+
+        # Check for MPI, if yes, dispatch to MPI worker, if not dispatch to
+        # the multiprocessing handling.
+        if _is_mpi_env():
+            self._dispatch_processing_mpi(process_function, output_filename,
+                                          station_tags)
+        else:
+            self._dispatch_processing_multiprocessing(
+                process_function, output_filename, station_tags)
+
+    def _dispatch_processing_mpi(self, process_function, output_filename,
+                                 station_tags):
+        import mpi4py
+
+        self.comm = mpi4py.MPI.COMM_WORLD
+        self.rank = self.comm.rank
+
+        if self.rank == 0:
+            self._dispatch_processing_mpi_master_node(process_function,
+                                                     output_filename,
+                                                     station_tags)
+        else:
+            self._dispatch_processing_mpi_worker_node(process_function,
+                                                      output_filename)
+
+    def _get_msg(self, source, tag):
+        """
+        Helper function to get a message if available, returns a
+        ReceivedMessage instance in case a message is available, None
+        otherwise.
+        """
+        tag = MSG_TAGS[tag]
+        if self.comm.Iprobe(source=source, tag=tag) is False:
+            return
+        return ReceivedMessage(self.comm.recv(source=source, tag=tag))
+
+    def _send_mpi(self, obj, dest, tag):
+        tag = MSG_TAGS[tag]
+        self.comm.send(obj=obj, dest=dest, tag=tag)
+
+    def _recv_mpi(self, source, tag):
+        tag = MSG_TAGS[tag]
+        return self.comm.recv(source=source, tag=tag)
+
+    def _dispatch_processing_mpi_master_node(self, process_function,
+                                             output_filename, station_tags):
+        """
+        The master node. It distributes the jobs and takes care that
+        metadata modifying actions are collective.
+        """
+        worker_nodes = range(1, self.comm.size)
+        workers_requesting_write = []
+
+        jobs = JobQueueHelper(jobs=station_tags,
+                              worker_names=worker_nodes)
+
+        last_print = time.time()
+
+        while not jobs.all_done:
+            if time.time() - last_print > 2.0:
+                print jobs
+                last_print = time.time()
+
+            time.sleep(0.01)
+
+            # Force writing if more than half of all nodes reached their
+            # memory limit.
+            if len(workers_requesting_write) >= 0.5 * self.comm.size:
+                print "\n\n"
+                print "MASTER STARTS SYNC!!!", workers_requesting_write
+                self._sync_metadata()
+                for rank in worker_nodes:
+                    # Get any additional requests ro write before proceeding.
+                    msg = self._get_msg(rank, "WORKER_REQUESTS_WRITE")
+                    if msg:
+                        print "Master: write request from worker %i ignored" \
+                            % rank
+
+                workers_requesting_write[:] = []
+                continue
+
+            for rank in worker_nodes:
+                # Check if worker reached its memory limit. The worker will
+                # wait until the signal to write the metadata has been sent.
+                if self._get_msg(rank, "WORKER_REQUESTS_WRITE"):
+                    print "Master: Worker %i requested write" % rank
+                    workers_requesting_write.append(rank)
+                    continue
+
+                # Check if node needs work.
+                if self._get_msg(rank, "WORKER_REQUESTS_ITEM"):
+                    # Send poison pill if no more work is available. After
+                    # that the worker should not request any more jobs.
+                    if jobs.queue_empty:
+                        self._send_mpi(POISON_PILL, rank, "MASTER_SENDS_ITEM")
+                    else:
+                        # And send a new station tag to process it.
+                        station_tag = jobs.get_job_for_worker(rank)
+                        self._send_mpi(station_tag, rank, "MASTER_SENDS_ITEM")
+
+                # Check if node is done with work.
+                msg = self._get_msg(rank, "WORKER_DONE_WITH_ITEM")
+                if msg:
+                    station_tag, result = msg.data
+                    jobs.received_job_from_worker(station_tag, result, rank)
+
+        # When no more jobs are left, send "ALL_DONE" to workers to shut
+        # them down.
+        for rank in worker_nodes:
+            self.comm.send(0, dest=rank, tag=MSG_TAGS["ALL_DONE"])
+
+    def _dispatch_processing_mpi_worker_node(self, process_function,
+                                             output_filename):
+        """
+        A worker node. It gets jobs, processes them and periodically waits
+        until a collective metadata update operation has happened.
+        """
+        self.stream_buffer = StreamBuffer()
+
+        poison_pill_received = False
+        waiting_for_write = False
+
+        # Loop until the 'ALL_DONE' message has been sent.
+        while not self._get_msg(0, "ALL_DONE"):
+            time.sleep(0.05)
+
+            # Check if master requested a write.
+            if self._get_msg(0, "MASTER_FORCES_WRITE"):
+                self._sync_metadata()
+                for key, value in self.stream_buffer.items():
+                    self._send_mpi((key, str(value)), 0,
+                                   "WORKER_DONE_WITH_ITEM")
+                self.stream_buffer.clear()
+                waiting_for_write = False
+
+            if waiting_for_write is True:
+                continue
+
+            if poison_pill_received:
+                continue
+
+            # Send message that the worker requires work.
+            self._send_mpi(None, 0, "WORKER_REQUESTS_ITEM")
+            station_tag = self._recv_mpi(0, "MASTER_SENDS_ITEM")
+
+            # If no more work to be done, store state and keep looping as
+            # stuff still might require to be written.
+            if station_tag == POISON_PILL:
+                if self.stream_buffer:
+                    self._send_mpi(None, 0, "WORKER_REQUESTS_WRITE")
+                poison_pill_received = True
+                continue
+
+            # Otherwise process the data.
+            stream, inv = self.get_data_for_tag(*station_tag)
+            process_function(stream, inv)
+
+            # Add stream to buffer.
+            self.stream_buffer[station_tag] = stream
+
+            # If the buffer is too large, request from the master to stop
+            # the current execution.
+            if self.stream_buffer.get_size() >= \
+                            MAX_MEMORY_PER_WORKER_IN_MB * 1024 ** 2:
+                self._send_mpi(None, 0, "WORKER_REQUESTS_WRITE")
+                print "Worker %i: requests write!" % self.rank
+                waiting_for_write = True
+
+    def _sync_metadata(self):
+        if hasattr(self, "stream_buffer"):
+            sendobj = self.stream_buffer.get_meta()
+        else:
+            sendobj = None
+        print "%i: Starting allgather" % self.rank
+        data = self.comm.allgather(sendobj=sendobj)
+        if self.rank != 0:
+            print "Rank %i: size of stream buffer: %.2f MB" % \
+                  (self.rank, self.stream_buffer.get_size() / 1024.0 / 1024.0)
+        else:
+            print "Rank 0"
+        self.comm.barrier()
+
+    def _dispatch_processing_multiprocessing(
+            self, process_function, output_filename, station_tags):
+
+        input_filename = self.__file.filename
+
+        input_file_lock = multiprocessing.Lock()
+        output_file_lock = multiprocessing.Lock()
+
+        cpu_count = multiprocessing.cpu_count()
+
+        # Create the input queue containing the jobs.
+        input_queue = multiprocessing.JoinableQueue(
+            maxsize=int(math.ceil(1.1 * (len(station_tags) + cpu_count))))
+
+        for _i in station_tags:
+            input_queue.put(_i)
+
+        # Put some poison pills.
+        for _ in xrange(cpu_count):
+            input_queue.put(POISON_PILL)
+
+        # Give a short time for the queues to play catch-up.
+        time.sleep(0.1)
+
+        # The output queue will collect the reports from the jobs.
+        output_queue = multiprocessing.Queue()
+
+        # Initialize the output file once.
+        output_data_set = SDFDataSet(output_filename)
+
+        class Process(multiprocessing.Process):
+            def __init__(self, in_queue, out_queue, in_filename,
+                         out_filename, in_lock, out_lock,
+                         processing_function):
+                super(Process, self).__init__()
+                self.input_queue = in_queue
+                self.output_queue = out_queue
+                self.input_filename = in_filename
+                self.output_filename = out_filename
+                self.input_file_lock = in_lock
+                self.output_file_lock = out_lock
+                self.processing_function = processing_function
+
+                with self.input_file_lock:
+                    self.input_data_set = SDFDataSet(input_filename)
+
+                with self.output_file_lock:
+                    self.input_data_set = SDFDataSet(input_filename)
+
+            def run(self):
+                while True:
+                    stationtag = self.input_queue.get(timeout=1)
+                    if stationtag == POISON_PILL:
+                        self.input_queue.task_done()
+                        break
+
+                    station, tag = stationtag
+                    print station, tag
+
+                    with self.input_file_lock:
+                        stream, inv = \
+                            self.input_data_set.get_data_for_tag(station,
+                                                                 tag)
+                    print "Processing...", stream
+                    output_stream = self.processing_function(stream, inv)
+
+                    self.input_queue.task_done()
+
+        # Create n processes, with n being the number of available CPUs.
+        processes = []
+        for _ in xrange(cpu_count):
+            processes.append(Process(input_queue, output_queue,
+                                     input_filename, output_filename,
+                                     input_file_lock, output_file_lock,
+                                     process_function))
+
+        for process in processes:
+            process.start()
+
+        for process in processes:
+            process.join()
+
+        return
+
+
+def apply_processing_multiprocessing(process_function, station, tag):
+    """
+    Applies the processing using the provided locks.
+    """
+    print len(input_data_set_container)
+    # with input_lock:
+    #     stream, inv = input_data_set.get_data_for_tag(station, tag)
+    #
+    # process_function = dill.loads(process_function)
+    #
+    # output_stream = process_function(stream, inv)
+    #
+    # with output_lock:
+    #     output_data_set.add_stationxml(inv)
+    #     output_data_set.add_waveform_file(output_stream, tag)
+
+
+
+def _is_mpi_env():
+    """
+    Returns True if the current environment is an MPI environment.
+    """
+    try:
+        import mpi4py
+    except ImportError:
+        return False
+
+    if mpi4py.MPI.COMM_WORLD.size == 1 and mpi4py.MPI.COMM_WORLD.rank == 0:
+        return False
+    return True
+
+
+class StreamBuffer(DictMixin):
+    """
+    Very simple key value store for obspy stream object with the additional
+    ability to approximate the size of all stored stream objects.
+    """
+    def __init__(self):
+        self.__streams = {}
+
+    def __getitem__(self, key):
+        return self.__streams[key]
+
+    def __setitem__(self, key, value):
+        if not isinstance(value, obspy.Stream):
+            raise TypeError
+        self.__streams[key] = value
+
+    def __delitem__(self, key):
+        del self.__streams[key]
+
+    def keys(self):
+        return self.__streams.keys()
+
+    def get_size(self):
+        """
+        Try to approximate the size of all stores Stream object.
+        """
+        cum_size = 0
+        for stream in self.__streams.itervalues():
+            cum_size += sys.getsizeof(stream)
+            for trace in stream:
+                cum_size += sys.getsizeof(trace)
+                cum_size += sys.getsizeof(trace.stats)
+                cum_size += sys.getsizeof(trace.stats.__dict__)
+                cum_size += sys.getsizeof(trace.data)
+                cum_size += trace.data.nbytes
+        # Add one percent buffer just in case.
+        return cum_size * 1.01
+
+    def get_meta(self):
+        return "\n".join(str(_i) for _i in self.__streams.keys())
+
+
+# Two objects describing a job and a worker.
+class Job(object):
+    __slots__ = "arguments", "result"
+
+    def __init__(self, arguments, result=None):
+        self.arguments = arguments
+        self.result = result
+
+    def __repr__(self):
+        return "Job(arguments=%s, result=%s)" % (str(self.arguments),
+                                                 str(self.result))
+
+Worker = collections.namedtuple("Worker", ["jobs"])
+
+
+class JobQueueHelper(object):
+    """
+    A simple helper class managing job distribution to workers.
+    """
+    def __init__(self, jobs, worker_names):
+        """
+        Init with a list of jobs and a list of workers.
+
+        :type jobs: List of arguments distributed to the jobs.
+        :param jobs: A list of jobs that will be distributed to the workers.
+        :type: list of integers
+        :param workers: A list of usually integers, each denoting a worker.
+        """
+        self._all_jobs = [Job(_i) for _i in jobs]
+        self._in_queue = self._all_jobs[:]
+        self._finished_jobs = []
+
+        self._workers = {_i: Worker([]) for _i in worker_names}
+
+    def get_job_for_worker(self, worker_name):
+        """
+        Get a job for a worker.
+
+        :param worker_name: The name of the worker requesting work.
+        """
+        job = self._in_queue.pop(0)
+        self._workers[worker_name].jobs.append(job)
+        return job.arguments
+
+    def received_job_from_worker(self, arguments, result, worker_name):
+        """
+        Call when a worker returned a job.
+
+        :param arguments: The arguments the jobs was called with.
+        :param result: The result of the job
+        :param worker_name: The name of the worker.
+        """
+        # Find the correct job.
+        job = [_i for _i in self._workers[worker_name].jobs
+               if _i.arguments == arguments]
+        assert len(job) == 1
+        job = job[0]
+        job.result = result
+
+        self._workers[worker_name].jobs.remove(job)
+        self._finished_jobs.append(job)
+
+    def __str__(self):
+        workers = "\n\t".join([
+            "Worker %s: %i jobs" % (str(key), len(value.jobs))
+            for key, value in self._workers.items()])
+
+        return (
+            "Jobs: In Queue: %i|Finished: %i|Total:%i\n"
+            "\t%s\n" % (len(self._in_queue), len(self._finished_jobs),
+                        len(self._all_jobs), workers))
+
+    @property
+    def queue_empty(self):
+        return not bool(self._in_queue)
+
+    @property
+    def finished(self):
+        return len(self._finished_jobs)
+
+    @property
+    def all_done(self):
+        return len(self._all_jobs) == len(self._finished_jobs)
