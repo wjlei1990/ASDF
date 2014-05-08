@@ -19,12 +19,11 @@ import time
 import random
 
 def process_function(stream, inventory):
-    time.sleep(random.random() * 10)
-    # stream.detrend("linear")
-    # stream.decimate(factor=5)
-    # stream.attach_response(inventory)
-    # stream.remove_response(output="VEL")
-    # stream.filter("lowpass", freq=2.0)
+    stream.detrend("linear")
+    stream.decimate(factor=5)
+    stream.filter("lowpass", freq=2.0)
+    stream.attach_response(inventory)
+    stream.remove_response(output="VEL")
 
 data_set.process(process_function, output_filename="new.h5")
 

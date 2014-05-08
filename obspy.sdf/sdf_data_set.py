@@ -17,6 +17,7 @@ import h5py
 import io
 import multiprocessing
 import math
+import itertools
 import numpy as np
 import obspy
 import os
@@ -280,6 +281,13 @@ class SDFDataSet(object):
             warnings.warn(msg, SDFWarnings)
             return
 
+        # XXX: Figure out why this is necessary. It should work according to
+        # the specs.
+        if self.mpi:
+            fletcher32 = False
+        else:
+            fletcher32 = True
+
         return {
             "station_name": station_name,
             "data_name": group_name,
@@ -289,7 +297,7 @@ class SDFDataSet(object):
                 "dtype": trace.data.dtype,
                 "compression": self.__compression[0],
                 "compression_opts": self.__compression[1],
-                "fletcher32": True,
+                "fletcher32": fletcher32,
                 "maxshape": (None,)
             },
             "dataset_attrs": {
@@ -432,15 +440,19 @@ class SDFDataSet(object):
 
     def _dispatch_processing_mpi(self, process_function, output_filename,
                                  station_tags):
+
+        output_dataset = SDFDataSet(output_filename, debug=self.debug)
+
         if self.mpi.rank == 0:
             self._dispatch_processing_mpi_master_node(process_function,
-                                                     output_filename,
-                                                     station_tags)
+                                                      output_dataset,
+                                                      station_tags)
         else:
             self._dispatch_processing_mpi_worker_node(process_function,
-                                                      output_filename)
+                                                      output_dataset)
+
     def _dispatch_processing_mpi_master_node(self, process_function,
-                                             output_filename, station_tags):
+                                             output_dataset, station_tags):
         """
         The master node. It distributes the jobs and takes care that
         metadata modifying actions are collective.
@@ -450,7 +462,7 @@ class SDFDataSet(object):
         worker_nodes = range(1, self.mpi.comm.size)
         workers_requesting_write = []
 
-        jobs = JobQueueHelper(jobs=station_tags,
+        jobs = JobQueueHelper(jobs=station_tags[:9],
                               worker_names=worker_nodes)
 
         __last_print = time.time()
@@ -478,7 +490,7 @@ class SDFDataSet(object):
                             for rank in worker_nodes]
                 self.mpi.MPI.Request.waitall(requests)
 
-                self._sync_metadata()
+                self._sync_metadata(output_dataset)
 
                 # Reset workers requesting a write.
                 workers_requesting_write[:] = []
@@ -524,7 +536,7 @@ class SDFDataSet(object):
         print(jobs)
 
     def _dispatch_processing_mpi_worker_node(self, process_function,
-                                             output_filename):
+                                             output_dataset):
         """
         A worker node. It gets jobs, processes them and periodically waits
         until a collective metadata update operation has happened.
@@ -543,8 +555,13 @@ class SDFDataSet(object):
 
             # Check if master requested a write.
             if self._get_msg(0, "MASTER_FORCES_WRITE"):
-                self._sync_metadata()
+                self._sync_metadata(output_dataset)
                 for key, value in self.stream_buffer.items():
+                    tag = key[1]
+                    for trace in value:
+                        output_dataset.\
+                            _add_trace_write_independent_information(
+                                trace.stats.__info, trace)
                     self._send_mpi((key, str(value)), 0,
                                    "WORKER_DONE_WITH_ITEM",
                                    blocking=False)
@@ -594,18 +611,31 @@ class SDFDataSet(object):
 
         self.mpi.comm.barrier()
 
-    def _sync_metadata(self):
+    def _sync_metadata(self, output_dataset):
         """
         Method responsible for synchronizing metadata across all processes
         in the HDF5 file. All metadata changing operations must be collective.
         """
         if hasattr(self, "stream_buffer"):
-            sendobj = self.stream_buffer.get_meta()
+            sendobj = []
+            for key, stream in self.stream_buffer.items():
+                tag = key[1]
+                for trace in stream:
+                    info = \
+                        output_dataset._add_trace_get_collective_information(
+                            trace, tag)
+                    trace.stats.__info = info
+                    sendobj.append(info)
         else:
-            sendobj = None
+            sendobj = [None]
 
         data = self.mpi.comm.allgather(sendobj=sendobj)
-        self.mpi.comm.barrier()
+        # Chain and remove None.
+        trace_info = itertools.ifilter(lambda x: x is not None,
+                                       itertools.chain.from_iterable(data))
+        # Write collective part.
+        for info in trace_info:
+            output_dataset._add_trace_write_collective_information(info)
 
         # Make sure all remaining write requests are processed before
         # proceeding.

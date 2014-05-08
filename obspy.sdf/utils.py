@@ -131,9 +131,6 @@ class StreamBuffer(DictMixin):
         # Add one percent buffer just in case.
         return cum_size * 1.01
 
-    def get_meta(self):
-        return "\n".join(str(_i) for _i in self.__streams.keys())
-
 
 # Two objects describing a job and a worker.
 class Job(object):
