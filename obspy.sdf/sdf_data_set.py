@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-Prototype implementation for a new file format using Python and ObsPy.
+Prototype implementation for a new file format using Python, ObsPy, and HDF5.
 
 :copyright:
     Lion Krischer (krischer@geophysik.uni-muenchen.de), 2013-2014
@@ -9,6 +9,8 @@ Prototype implementation for a new file format using Python and ObsPy.
     GNU Lesser General Public License, Version 3
     (http://www.gnu.org/copyleft/lesser.html)
 """
+from __future__ import absolute_import
+
 import copy
 import collections
 import h5py
@@ -18,141 +20,13 @@ import math
 import numpy as np
 import obspy
 import os
-from UserDict import DictMixin
 import warnings
-import weakref
-import sys
 import time
 
-
-FORMAT_NAME = "SDF"
-FORMAT_VERSION = "0.0.1b"
-
-# MPI message tags used for communication.
-MSG_TAGS = [
-    "MASTER_FORCES_WRITE",
-    "MASTER_SENDS_ITEM",
-    "WORKER_REQUESTS_ITEM",
-    "WORKER_DONE_WITH_ITEM",
-    "WORKER_REQUESTS_WRITE",
-    # Message send by the master to indicate everything has been processed.
-    # Otherwise all workers will keep looping to be able to synchronize
-    # metadata.
-    "ALL_DONE",
-]
-
-# Convert to two-way dict.
-MSG_TAGS = {msg: i  for i, msg in enumerate(MSG_TAGS)}
-MSG_TAGS.update({value: key for key, value in MSG_TAGS.items()})
-
-ReceivedMessage = collections.namedtuple("ReceivedMessage", ["data"])
-
-POISON_PILL = "POISON_PILL"
-
-MAX_MEMORY_PER_WORKER_IN_MB = 100
-
-input_data_set_container = []
-output_data_set_container = []
-
-
-class SDFException(Exception):
-    """
-    Generic exception for the Python SDF implementation.
-    """
-    pass
-
-
-class SDFWarnings(UserWarning):
-    """
-    Generic SDF warning.
-    """
-    pass
-
-
-# List all compression options.
-COMPRESSIONS = {
-    None: (None, None),
-    "lzf": ("lzf", None),
-    "gzip-0": ("gzip", 0),
-    "gzip-1": ("gzip", 1),
-    "gzip-2": ("gzip", 2),
-    "gzip-3": ("gzip", 3),
-    "gzip-4": ("gzip", 4),
-    "gzip-5": ("gzip", 5),
-    "gzip-6": ("gzip", 6),
-    "gzip-7": ("gzip", 7),
-    "gzip8-": ("gzip", 8),
-    "gzip-9": ("gzip", 9),
-    "szip-ec-8": ("szip", ("ec", 8)),
-    "szip-ec-10": ("szip", ("ec", 10)),
-    "szip-nn-8": ("szip", ("nn", 8)),
-    "szip-nn-10": ("szip", ("nn", 10))
-}
-
-
-def sizeof_fmt(num):
-    """
-    Handy formatting for human readable filesize.
-
-    From http://stackoverflow.com/a/1094933/1657047
-    """
-    for x in ["bytes", "KB", "MB", "GB"]:
-        if num < 1024.0 and num > -1024.0:
-            return "%3.1f %s" % (num, x)
-        num /= 1024.0
-    return "%3.1f %s" % (num, "TB")
-
-
-class StationAccessor(object):
-    """
-    Helper class to facilitate access to the waveforms and stations.
-    """
-    def __init__(self, sdf_data_set):
-        # Use weak references to not have any dangling references to the HDF5
-        # file around.
-        self.__data_set = weakref.ref(sdf_data_set)
-
-
-    def __getattr__(self, item):
-        __waveforms = self.__data_set()._waveform_group
-        if item.replace("_", ".") not in __waveforms:
-            raise AttributeError
-        return WaveformAccessor(item.replace("_", "."), self.__data_set())
-
-    def __dir__(self):
-        __waveforms = self.__data_set()._waveform_group
-        return [_i.replace(".", "_") for _i in __waveforms.iterkeys()]
-
-
-class WaveformAccessor(object):
-    """
-    Helper class facilitating access to the actual waveforms and stations.
-    """
-    def __init__(self, station_name, sdf_data_set):
-        # Use weak references to not have any dangling references to the HDF5
-        # file around.
-        self.__station_name = station_name
-        self.__data_set = weakref.ref(sdf_data_set)
-
-    def __getattr__(self, item):
-        if item != "StationXML":
-            __station = self.__data_set()._waveform_group[self.__station_name]
-            keys = [_i for _i in __station.iterkeys()
-                if _i.endswith("__" + item)]
-            traces = [self.__data_set().get_waveform(_i) for _i in keys]
-            return obspy.Stream(traces=traces)
-        else:
-            return self.__data_set().get_station(self.__station_name)
-
-    def __dir__(self):
-        __station = self.__data_set()._waveform_group[self.__station_name]
-        directory = []
-        if "StationXML" in __station:
-            directory.append("StationXML")
-        directory.extend([_i.split("__")[-1]
-                          for _i in __station.iterkeys()
-                          if _i != "StationXML"])
-        return directory
+from header import SDFException, SDFWarnings, COMPRESSIONS, FORMAT_NAME, \
+    FORMAT_VERSION, MSG_TAGS, MAX_MEMORY_PER_WORKER_IN_MB, POISON_PILL
+from utils import is_mpi_env, StationAccessor, sizeof_fmt, ReceivedMessage,\
+    pretty_receiver_log, pretty_sender_log, JobQueueHelper, StreamBuffer
 
 
 class SDFDataSet(object):
@@ -167,6 +41,8 @@ class SDFDataSet(object):
         :param compression: The compression to use. Defaults to 'szip-nn-10'
             which yielded good results in the past. Will only be applied to
             newly added data sets. Existing ones are not touched.
+        :type debug: bool
+        :param debug: If True, print debug messages. Defaults to False.
         """
         self.debug = debug
         if compression not in COMPRESSIONS:
@@ -176,26 +52,44 @@ class SDFDataSet(object):
             raise Exception(msg)
         self.__compression = COMPRESSIONS[compression]
 
-        # Open file or take an already open file object.
-        if isinstance(file_object, h5py.File):
-            self.__file = file_object
+        # Turn off compression for parallel I/O.
+        if self.__compression[0] and self.mpi:
+            msg = "Compression will be disabled as parallel HDF5 does not " \
+                  "support compression"
+            warnings.warn(msg)
+            self.__compression = COMPRESSIONS[None]
+
+        # Open file or take an already open HDF5 file object.
+        if not self.mpi:
+            if isinstance(file_object, h5py.File):
+                self.__file = file_object
+                if self.__file.mode != "r+":
+                    raise ValueError("The file pointer must have mode 'r+'.")
+            else:
+                self.__file = h5py.File(file_object, "r+")
         else:
-            self.__file = h5py.File(file_object, "a")
+            if isinstance(file_object, h5py.File):
+                self.__file = file_object
+                if self.__file.mode != "r+" or self.__file.driver != "mpio":
+                    raise ValueError("A file pointer passed with MPI enabled "
+                                     "must have mode 'r+' and the 'mpio' "
+                                     "driver")
+            else:
+                self.__file = h5py.File(file_object, "r+", driver="mpio",
+                                        comm=self.mpi.comm)
 
         if "file_format" in self.__file.attrs:
             if self.__file.attrs["file_format"] != FORMAT_NAME:
-                # Cleanup and raise.
-                self.__del__()
                 msg = "Not a '%s' file." % FORMAT_NAME
                 raise SDFException(msg)
             if "file_format_version" not in self.__file.attrs:
-                msg = ("No file format version given for file '%s'. The function "
-                       "will continue but the result is undefined." %
+                msg = ("No file format version given for file '%s'. The "
+                       "program will continue but the result is undefined." %
                        self.__file.filename)
                 warnings.warn(msg, SDFWarnings)
             elif self.__file.attrs["file_format_version"] != FORMAT_VERSION:
                 msg = ("The file '%s' has version number '%s'. The reader "
-                       "expects version '%s'. The function will continue but "
+                       "expects version '%s'. The program will continue but "
                        "the result is undefined." % (
                     self.__file.filename,
                     self.__file.attrs["file_format_version"],
@@ -209,11 +103,26 @@ class SDFDataSet(object):
         if not "Waveforms" in self.__file:
             self.__file.create_group("Waveforms")
         self.__waveforms = self.__file["Waveforms"]
+
         if not "Provenance" in self.__file:
             self.__file.create_group("Provenance")
         self.__provenance = self.__file["Provenance"]
 
         self.waveforms = StationAccessor(self)
+
+        # Force collective init if run in an MPI environment.
+        if self.mpi:
+            self.mpi.comm.barrier()
+
+    def __del__(self):
+        """
+        Attempts to close the HDF5 file.
+        """
+        try:
+            self.__file.close()
+        # Value Error is raised if the file has already been closed.
+        except ValueError:
+            pass
 
     @property
     def _waveform_group(self):
@@ -258,21 +167,13 @@ class SDFDataSet(object):
 
     def get_station(self, station_name):
         """
-        Retrieves the specified StationXML as an obspy.station.Inventory object.
+        Retrieves the specified StationXML as an obspy.station.Inventory
+        object.
         """
         data = self.__file["Waveforms"][station_name]["StationXML"]
         inv = obspy.read_inventory(io.BytesIO(data.value.tostring()),
             format="stationxml")
         return inv
-
-    def __del__(self):
-        """
-        Attempts to close the HDF5 file.
-        """
-        try:
-            self.__file.close()
-        except:
-            pass
 
     def __str__(self):
         filesize = sizeof_fmt(os.path.getsize(self.__file.filename))
@@ -422,7 +323,7 @@ class SDFDataSet(object):
         pass
 
     def process(self, process_function, output_filename):
-        stations = self.__file["Waveforms"].keys()
+        stations = sorted(self.__file["Waveforms"].keys())
         # Get all possible station and waveform tag combinations and let
         # each process read the data it needs.
         station_tags = []
@@ -437,9 +338,11 @@ class SDFDataSet(object):
             for tag in tags:
                 station_tags.append((station, tag))
 
+        assert len(station_tags) == len(set(station_tags))
+
         # Check for MPI, if yes, dispatch to MPI worker, if not dispatch to
         # the multiprocessing handling.
-        if _is_mpi_env():
+        if self.mpi:
             self._dispatch_processing_mpi(process_function, output_filename,
                                           station_tags)
         else:
@@ -448,51 +351,13 @@ class SDFDataSet(object):
 
     def _dispatch_processing_mpi(self, process_function, output_filename,
                                  station_tags):
-        import mpi4py
-
-        self.comm = mpi4py.MPI.COMM_WORLD
-        self.rank = self.comm.rank
-
-        if self.rank == 0:
+        if self.mpi.rank == 0:
             self._dispatch_processing_mpi_master_node(process_function,
                                                      output_filename,
                                                      station_tags)
         else:
             self._dispatch_processing_mpi_worker_node(process_function,
                                                       output_filename)
-
-    def _get_msg(self, source, tag):
-        """
-        Helper function to get a message if available, returns a
-        ReceivedMessage instance in case a message is available, None
-        otherwise.
-        """
-        tag = MSG_TAGS[tag]
-        if not self.comm.Iprobe(source=source, tag=tag):
-            return
-        msg = ReceivedMessage(self.comm.recv(source=source, tag=tag))
-        # XXX: No clue why this is necessary!
-        while self.comm.Iprobe(source=source, tag=tag):
-            self.comm.recv(source=source, tag=tag)
-        if self.debug:
-            pretty_receiver_log(source, self.rank, tag)
-        return msg
-
-    def _send_mpi(self, obj, dest, tag, blocking=True):
-        tag = MSG_TAGS[tag]
-        if blocking:
-            self.comm.send(obj=obj, dest=dest, tag=tag)
-        self.comm.isend(obj=obj, dest=dest, tag=tag)
-        if self.debug:
-            pretty_sender_log(dest, self.rank, tag)
-
-    def _recv_mpi(self, source, tag):
-        tag = MSG_TAGS[tag]
-        msg = self.comm.recv(source=source, tag=tag)
-        if self.debug:
-            pretty_receiver_log(source, self.rank, tag)
-        return msg
-
     def _dispatch_processing_mpi_master_node(self, process_function,
                                              output_filename, station_tags):
         """
@@ -501,7 +366,7 @@ class SDFDataSet(object):
         """
         from mpi4py import MPI
 
-        worker_nodes = range(1, self.comm.size)
+        worker_nodes = range(1, self.mpi.comm.size)
         workers_requesting_write = []
 
         jobs = JobQueueHelper(jobs=station_tags,
@@ -518,7 +383,7 @@ class SDFDataSet(object):
                 print(jobs)
                 __last_print = time.time()
 
-            if len(workers_requesting_write) >= 0.5 * self.comm.size:
+            if len(workers_requesting_write) >= 0.5 * self.mpi.comm.size:
                 if self.debug:
                     print("MASTER: initializing metadata synchronization.")
                 for rank in worker_nodes:
@@ -531,13 +396,13 @@ class SDFDataSet(object):
 
             # Retrieve any possible message and "dispatch" appropriately.
             status = MPI.Status()
-            msg = self.comm.recv(source=MPI.ANY_SOURCE, tag=MPI.ANY_TAG,
+            msg = self.mpi.comm.recv(source=MPI.ANY_SOURCE, tag=MPI.ANY_TAG,
                                  status=status)
             tag = MSG_TAGS[status.tag]
             source = status.source
 
             if self.debug:
-                pretty_receiver_log(source, self.rank, status.tag)
+                pretty_receiver_log(source, self.mpi.rank, status.tag, msg)
 
             if tag == "WORKER_REQUESTS_ITEM":
                 # Send poison pill if no more work is available. After
@@ -562,6 +427,9 @@ class SDFDataSet(object):
         # Shutdown workers.
         for rank in worker_nodes:
             self._send_mpi(None, rank, "ALL_DONE")
+
+        self.mpi.comm.barrier()
+        print(jobs)
 
     def _dispatch_processing_mpi_worker_node(self, process_function,
                                              output_filename):
@@ -632,25 +500,31 @@ class SDFDataSet(object):
                                    blocking=False)
                     worker_state["waiting_for_write"] = True
 
-    def _sync_metadata(self):
+        self.mpi.comm.barrier()
 
+    def _sync_metadata(self):
+        """
+        Method responsible for synchronizing metadata across all processes
+        in the HDF5 file. All metadata changing operations must be collective.
+        """
         if hasattr(self, "stream_buffer"):
             sendobj = self.stream_buffer.get_meta()
         else:
             sendobj = None
 
-        data = self.comm.allgather(sendobj=sendobj)
-        self.comm.barrier()
+        data = self.mpi.comm.allgather(sendobj=sendobj)
+        self.mpi.comm.barrier()
 
         # Make sure all remaining write requests are processed before
         # proceeding.
-        if self.rank == 0:
+        if self.mpi.rank == 0:
             for rank in [1, 2, 3]:
                 msg = self._get_msg(rank, "WORKER_REQUESTS_WRITE")
                 if self.debug and msg:
-                    print("MASTER: Ignoring write request by worker %i" % i)
+                    print("MASTER: Ignoring write request by worker %i" %
+                          rank)
 
-        self.comm.barrier()
+        self.mpi.comm.barrier()
 
     def _dispatch_processing_multiprocessing(
             self, process_function, output_filename, station_tags):
@@ -736,209 +610,59 @@ class SDFDataSet(object):
 
         return
 
+    @property
+    def mpi(self):
+        if hasattr(self, "__is_mpi"):
+            return self.__is_mpi
+        else:
+            self.__is_mpi = is_mpi_env()
 
-def apply_processing_multiprocessing(process_function, station, tag):
-    """
-    Applies the processing using the provided locks.
-    """
-    print len(input_data_set_container)
-    # with input_lock:
-    #     stream, inv = input_data_set.get_data_for_tag(station, tag)
-    #
-    # process_function = dill.loads(process_function)
-    #
-    # output_stream = process_function(stream, inv)
-    #
-    # with output_lock:
-    #     output_data_set.add_stationxml(inv)
-    #     output_data_set.add_waveform_file(output_stream, tag)
+        # If it actually is an mpi environment, set the communicator and the
+        # rank.
+        if self.__is_mpi:
+            import mpi4py
 
-@property
-def mpi(self):
-    if hasattr(self, "__is_mpi"):
+            # Set mpi tuple to easy class wide access.
+            mpi_ns = collections.namedtuple("mpi_ns", ["comm", "rank",
+                                                       "size"])
+            comm = mpi4py.MPI.COMM_WORLD
+            self.__is_mpi = mpi_ns(comm=comm, rank=comm.rank, size=comm.size)
+
         return self.__is_mpi
-    else:
-        self.__is_mpi = self.__is_mpi_env()
-    return self._is_mpi
 
-def __is_mpi_env(self):
-    """
-    Returns True if the current environment is an MPI environment.
-    """
-    try:
-        import mpi4py
-    except ImportError:
-        return False
-
-    if mpi4py.MPI.COMM_WORLD.size == 1 and mpi4py.MPI.COMM_WORLD.rank == 0:
-        return False
-    return True
-
-
-class StreamBuffer(DictMixin):
-    """
-    Very simple key value store for obspy stream object with the additional
-    ability to approximate the size of all stored stream objects.
-    """
-    def __init__(self):
-        self.__streams = {}
-
-    def __getitem__(self, key):
-        return self.__streams[key]
-
-    def __setitem__(self, key, value):
-        if not isinstance(value, obspy.Stream):
-            raise TypeError
-        self.__streams[key] = value
-
-    def __delitem__(self, key):
-        del self.__streams[key]
-
-    def keys(self):
-        return self.__streams.keys()
-
-    def get_size(self):
+    def _get_msg(self, source, tag):
         """
-        Try to approximate the size of all stores Stream object.
+        Helper method to get a message if available, returns a
+        ReceivedMessage instance in case a message is available, None
+        otherwise.
         """
-        cum_size = 0
-        for stream in self.__streams.itervalues():
-            cum_size += sys.getsizeof(stream)
-            for trace in stream:
-                cum_size += sys.getsizeof(trace)
-                cum_size += sys.getsizeof(trace.stats)
-                cum_size += sys.getsizeof(trace.stats.__dict__)
-                cum_size += sys.getsizeof(trace.data)
-                cum_size += trace.data.nbytes
-        # Add one percent buffer just in case.
-        return cum_size * 1.01
+        tag = MSG_TAGS[tag]
+        if not self.mpi.comm.Iprobe(source=source, tag=tag):
+            return
+        msg = ReceivedMessage(self.mpi.comm.recv(source=source, tag=tag))
+        if self.debug:
+            pretty_receiver_log(source, self.mpi.rank, tag, msg.data)
+        return msg
 
-    def get_meta(self):
-        return "\n".join(str(_i) for _i in self.__streams.keys())
-
-
-# Two objects describing a job and a worker.
-class Job(object):
-    __slots__ = "arguments", "result"
-
-    def __init__(self, arguments, result=None):
-        self.arguments = arguments
-        self.result = result
-
-    def __repr__(self):
-        return "Job(arguments=%s, result=%s)" % (str(self.arguments),
-                                                 str(self.result))
-
-Worker = collections.namedtuple("Worker", ["jobs"])
-
-
-class JobQueueHelper(object):
-    """
-    A simple helper class managing job distribution to workers.
-    """
-    def __init__(self, jobs, worker_names):
+    def _send_mpi(self, obj, dest, tag, blocking=True):
         """
-        Init with a list of jobs and a list of workers.
-
-        :type jobs: List of arguments distributed to the jobs.
-        :param jobs: A list of jobs that will be distributed to the workers.
-        :type: list of integers
-        :param workers: A list of usually integers, each denoting a worker.
+        Helper method to send a message via MPI.
         """
-        self._all_jobs = [Job(_i) for _i in jobs]
-        self._in_queue = self._all_jobs[:]
-        self._finished_jobs = []
+        tag = MSG_TAGS[tag]
+        if blocking:
+            self.mpi.comm.send(obj=obj, dest=dest, tag=tag)
+        else:
+            self.mpi.comm.isend(obj=obj, dest=dest, tag=tag)
+        if self.debug:
+            pretty_sender_log(dest, self.mpi.rank, tag, obj)
 
-        self._workers = {_i: Worker([]) for _i in worker_names}
-
-    def get_job_for_worker(self, worker_name):
+    def _recv_mpi(self, source, tag):
         """
-        Get a job for a worker.
-
-        :param worker_name: The name of the worker requesting work.
+        Helper method to receive a message via MPI.
         """
-        job = self._in_queue.pop(0)
-        self._workers[worker_name].jobs.append(job)
-        return job.arguments
+        tag = MSG_TAGS[tag]
+        msg = self.mpi.comm.recv(source=source, tag=tag)
+        if self.debug:
+            pretty_receiver_log(source, self.mpi.rank, tag, msg)
+        return msg
 
-    def received_job_from_worker(self, arguments, result, worker_name):
-        """
-        Call when a worker returned a job.
-
-        :param arguments: The arguments the jobs was called with.
-        :param result: The result of the job
-        :param worker_name: The name of the worker.
-        """
-        # Find the correct job.
-        job = [_i for _i in self._workers[worker_name].jobs
-               if _i.arguments == arguments]
-        assert len(job) == 1
-        job = job[0]
-        job.result = result
-
-        self._workers[worker_name].jobs.remove(job)
-        self._finished_jobs.append(job)
-
-    def __str__(self):
-        workers = "\n\t".join([
-            "Worker %s: %i jobs" % (str(key), len(value.jobs))
-            for key, value in self._workers.items()])
-
-        return (
-            "Jobs: In Queue: %i|Finished: %i|Total:%i\n"
-            "\t%s\n" % (len(self._in_queue), len(self._finished_jobs),
-                        len(self._all_jobs), workers))
-
-    @property
-    def queue_empty(self):
-        return not bool(self._in_queue)
-
-    @property
-    def finished(self):
-        return len(self._finished_jobs)
-
-    @property
-    def all_done(self):
-        return len(self._all_jobs) == len(self._finished_jobs)
-
-
-def pretty_sender_log(rank, destination, tag):
-    import colorama
-    prefix = colorama.Fore.RED + "sent to      " + colorama.Fore.RESET
-    _pretty_log(prefix, destination, rank, tag)
-
-def pretty_receiver_log(source, rank, tag):
-    import colorama
-    prefix = colorama.Fore.GREEN + "received from" + colorama.Fore.RESET
-    _pretty_log(prefix, rank, source, tag)
-
-def _pretty_log(prefix, first, second, tag):
-    import colorama
-
-    colors = (colorama.Back.WHITE + colorama.Fore.MAGENTA,
-              colorama.Back.WHITE + colorama.Fore.BLUE,
-              colorama.Back.WHITE + colorama.Fore.GREEN,
-              colorama.Back.WHITE + colorama.Fore.YELLOW)
-
-    tag_colors = (
-        colorama.Fore.RED,
-        colorama.Fore.GREEN,
-        colorama.Fore.BLUE,
-        colorama.Fore.YELLOW,
-        colorama.Fore.MAGENTA,
-    )
-
-    tags = [i for i in MSG_TAGS.keys() if isinstance(i, basestring)]
-
-    tag = MSG_TAGS[tag]
-    tag = tag_colors[tags.index(tag) % len(tag_colors)] + tag + \
-          colorama.Style.RESET_ALL
-
-    first = colorama.Fore.YELLOW + "MASTER  " + colorama.Fore.RESET \
-        if first == 0 else colors[first % len(colors)] + \
-        ("WORKER %i" %  first) + colorama.Style.RESET_ALL
-    second = colorama.Fore.YELLOW + "MASTER  " + colorama.Fore.RESET \
-        if second == 0 else colors[second % len(colors)] + \
-                           ("WORKER %i" %  second) + colorama.Style.RESET_ALL
-
-    print("%s %s %s [%s]" % (first, prefix, second, tag))

@@ -9,22 +9,23 @@ path = "/Users/lion/workspace/data/2014_01--SDF_Earthquake_data_set"
 filename = "test_file.h5"
 
 
-data_set = SDFDataSet(filename, debug=False)
-print("")
-print data_set
-print("")
+data_set = SDFDataSet(filename)
+if not data_set.mpi or data_set.mpi.rank == 0:
+    print(data_set)
+    print("")
 
+
+import time
+import random
 
 def process_function(stream, inventory):
-    stream.detrend("linear")
-    stream.decimate(factor=5)
+    time.sleep(random.random() * 10)
+    # stream.detrend("linear")
+    # stream.decimate(factor=5)
     # stream.attach_response(inventory)
     # stream.remove_response(output="VEL")
-    stream.filter("lowpass", freq=2.0)
+    # stream.filter("lowpass", freq=2.0)
 
-
-# Apply this to all stations. This will in the future detect if is it run in
-# an MPI environment and otherwise use os.fork to achieve parallelism.
 data_set.process(process_function, output_filename="new.h5")
 
 
