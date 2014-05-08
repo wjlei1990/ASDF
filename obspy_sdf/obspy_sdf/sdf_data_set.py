@@ -15,18 +15,18 @@ import copy
 import collections
 import h5py
 import io
-import multiprocessing
-import math
 import itertools
+import math
+import multiprocessing
 import numpy as np
 import obspy
 import os
 import warnings
 import time
 
-from header import SDFException, SDFWarnings, COMPRESSIONS, FORMAT_NAME, \
+from .header import SDFException, SDFWarnings, COMPRESSIONS, FORMAT_NAME, \
     FORMAT_VERSION, MSG_TAGS, MAX_MEMORY_PER_WORKER_IN_MB, POISON_PILL
-from utils import is_mpi_env, StationAccessor, sizeof_fmt, ReceivedMessage,\
+from .utils import is_mpi_env, StationAccessor, sizeof_fmt, ReceivedMessage,\
     pretty_receiver_log, pretty_sender_log, JobQueueHelper, StreamBuffer
 
 
@@ -118,6 +118,7 @@ class SDFDataSet(object):
         Attempts to close the HDF5 file.
         """
         try:
+            self.__file.flush()
             self.__file.close()
         # Value Error is raised if the file has already been closed.
         except ValueError:

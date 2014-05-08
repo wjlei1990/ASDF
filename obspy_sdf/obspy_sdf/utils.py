@@ -1,11 +1,13 @@
-import obspy
-import weakref
-from UserDict import DictMixin
-import sys
-import collections
-import time
+from __future__ import absolute_import
 
-from header import MSG_TAGS
+import collections
+import obspy
+import sys
+import time
+from UserDict import DictMixin
+import weakref
+
+from .header import MSG_TAGS
 
 # Tuple holding a the body of a received message.
 ReceivedMessage = collections.namedtuple("ReceivedMessage", ["data"])
