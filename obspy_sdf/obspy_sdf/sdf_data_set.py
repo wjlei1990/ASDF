@@ -124,6 +124,34 @@ class SDFDataSet(object):
         except ValueError:
             pass
 
+    def __eq__(self, other):
+        """
+        :type other:`~obspy_sdf.SDFDDataSet`
+        """
+        if type(self) != type(other):
+            return False
+        if self._waveform_group.keys() != other._waveform_group.keys():
+            return False
+        if self._provenance_group.keys() != other._provenance_group.keys():
+            return False
+        for station, group in self._waveform_group.items():
+            other_group = other._waveform_group[station]
+            for tag, data_set in group.items():
+                other_data_set = other_group[tag]
+                try:
+                    if tag == "StationXML":
+                        np.testing.assert_array_equal(data_set.value,
+                                                      other_data_set.value)
+                    else:
+                        np.testing.assert_array_almost_equal(
+                            data_set.value, other_data_set.value)
+                except AssertionError:
+                    return False
+        return True
+
+    def __ne__(self, other):
+        return not self.__eq__(other)
+
     @property
     def _waveform_group(self):
         return self.__file["Waveforms"]
