@@ -103,11 +103,9 @@ class SDFDataSet(object):
         # Create the waveform and provenance groups.
         if not "Waveforms" in self.__file:
             self.__file.create_group("Waveforms")
-        self.__waveforms = self.__file["Waveforms"]
 
         if not "Provenance" in self.__file:
             self.__file.create_group("Provenance")
-        self.__provenance = self.__file["Provenance"]
 
         self.waveforms = StationAccessor(self)
 
@@ -128,6 +126,14 @@ class SDFDataSet(object):
     @property
     def _waveform_group(self):
         return self.__file["Waveforms"]
+
+    @property
+    def _provenance_group(self):
+        return self.__file["Waveforms"]
+
+    @property
+    def filename(self):
+        return self.__file.filename
 
     def get_waveform(self, waveform_name):
         """
@@ -193,9 +199,9 @@ class SDFDataSet(object):
         Helper function.
         """
         station_name = "%s.%s" % (network_code, station_code)
-        if not station_name in self.__waveforms:
-            self.__waveforms.create_group(station_name)
-        return self.__waveforms[station_name]
+        if not station_name in self._waveform_group:
+            self._waveform_group.create_group(station_name)
+        return self._waveform_group[station_name]
 
     def add_waveform_file(self, waveform, tag):
         """
@@ -235,7 +241,7 @@ class SDFDataSet(object):
         :param trace:
         :return:
         """
-        self.__waveforms[info["data_name"]][:] = trace.data
+        self._waveform_group[info["data_name"]][:] = trace.data
 
     def _add_trace_write_collective_information(self, info):
         """
@@ -245,9 +251,9 @@ class SDFDataSet(object):
         :return:
         """
         station_name = info["station_name"]
-        if not station_name in self.__waveforms:
-            self.__waveforms.create_group(station_name)
-        group = self.__waveforms[station_name]
+        if not station_name in self._waveform_group:
+            self._waveform_group.create_group(station_name)
+        group = self._waveform_group[station_name]
 
         ds = group.create_dataset(**info["dataset_creation_params"])
         for key, value in info["dataset_attrs"].items():
@@ -275,7 +281,7 @@ class SDFDataSet(object):
             tag=tag)
 
         group_name = "%s/%s" % (station_name, data_name)
-        if group_name in self.__waveforms:
+        if group_name in self._waveform_group:
             msg = "Data '%s' already exists in file. Will not be added!" % \
                   group_name
             warnings.warn(msg, SDFWarnings)
@@ -427,29 +433,30 @@ class SDFDataSet(object):
             for tag in tags:
                 station_tags.append((station, tag))
 
+        # XXX: Remove once some other structure has been established.
         assert len(station_tags) == len(set(station_tags))
+
+        output_data_set = SDFDataSet(output_filename)
 
         # Check for MPI, if yes, dispatch to MPI worker, if not dispatch to
         # the multiprocessing handling.
         if self.mpi:
-            self._dispatch_processing_mpi(process_function, output_filename,
+            self._dispatch_processing_mpi(process_function, output_data_set,
                                           station_tags)
         else:
             self._dispatch_processing_multiprocessing(
-                process_function, output_filename, station_tags)
+                process_function, output_data_set, station_tags)
 
-    def _dispatch_processing_mpi(self, process_function, output_filename,
+    def _dispatch_processing_mpi(self, process_function, output_data_set,
                                  station_tags):
-
-        output_dataset = SDFDataSet(output_filename, debug=self.debug)
 
         if self.mpi.rank == 0:
             self._dispatch_processing_mpi_master_node(process_function,
-                                                      output_dataset,
+                                                      output_data_set,
                                                       station_tags)
         else:
             self._dispatch_processing_mpi_worker_node(process_function,
-                                                      output_dataset)
+                                                      output_data_set)
 
     def _dispatch_processing_mpi_master_node(self, process_function,
                                              output_dataset, station_tags):
@@ -649,9 +656,10 @@ class SDFDataSet(object):
         self.mpi.comm.barrier()
 
     def _dispatch_processing_multiprocessing(
-            self, process_function, output_filename, station_tags):
+            self, process_function, output_data_set, station_tags):
 
-        input_filename = self.__file.filename
+        input_filename = self.filename
+        output_filename = output_data_set.filename
 
         input_file_lock = multiprocessing.Lock()
         output_file_lock = multiprocessing.Lock()
@@ -675,9 +683,6 @@ class SDFDataSet(object):
         # The output queue will collect the reports from the jobs.
         output_queue = multiprocessing.Queue()
 
-        # Initialize the output file once.
-        output_data_set = SDFDataSet(output_filename)
-
         class Process(multiprocessing.Process):
             def __init__(self, in_queue, out_queue, in_filename,
                          out_filename, in_lock, out_lock,
@@ -695,7 +700,7 @@ class SDFDataSet(object):
                     self.input_data_set = SDFDataSet(input_filename)
 
                 with self.output_file_lock:
-                    self.input_data_set = SDFDataSet(input_filename)
+                    self.output_data_set = SDFDataSet(output_filename)
 
             def run(self):
                 while True:
