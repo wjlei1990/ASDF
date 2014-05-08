@@ -66,7 +66,7 @@ class SDFDataSet(object):
                 if self.__file.mode != "r+":
                     raise ValueError("The file pointer must have mode 'r+'.")
             else:
-                self.__file = h5py.File(file_object, "r+")
+                self.__file = h5py.File(file_object, "a")
         else:
             if isinstance(file_object, h5py.File):
                 self.__file = file_object
@@ -75,7 +75,7 @@ class SDFDataSet(object):
                                      "must have mode 'r+' and the 'mpio' "
                                      "driver")
             else:
-                self.__file = h5py.File(file_object, "r+", driver="mpio",
+                self.__file = h5py.File(file_object, "a", driver="mpio",
                                         comm=self.mpi.comm)
 
         if "file_format" in self.__file.attrs:
@@ -196,7 +196,6 @@ class SDFDataSet(object):
             self.__waveforms.create_group(station_name)
         return self.__waveforms[station_name]
 
-
     def add_waveform_file(self, waveform, tag):
         """
         Adds one or more waveforms to the file.
@@ -219,32 +218,114 @@ class SDFDataSet(object):
 
         # Actually add the data.
         for trace in waveform:
-            station_group = self.__get_station_group(trace.stats.network,
-                                                     trace.stats.station)
-            # Generate the name of the data within its station folder.
-            data_name = "{net}.{sta}.{loc}.{cha}__{start}__{end}__{tag}".format(
-                net=trace.stats.network,
-                sta=trace.stats.station,
-                loc=trace.stats.location,
-                cha=trace.stats.channel,
-                start=trace.stats.starttime.strftime("%Y-%m-%dT%H:%M:%S"),
-                end=trace.stats.endtime.strftime("%Y-%m-%dT%H:%M:%S"),
-                tag=tag)
-            if data_name in station_group:
-                msg = "Data '%s' already exists in file. Will not be added!" % \
-                    data_name
-                warnings.warn(msg, SDFWarnings)
+            # Complicated multi-step process but it enables one to use
+            # parallel I/O with the same functions.
+            info = self._add_trace_get_collective_information(trace, tag)
+            if info is None:
                 continue
-            # Actually add the data. Use maxshape to create an extendable data
-            # set.
-            station_group.create_dataset(
-                data_name, data=trace.data, compression=self.__compression[0],
-                compression_opts=self.__compression[1], fletcher32=True,
-                maxshape=(None,))
-            station_group[data_name].attrs["starttime"] = \
-                str(trace.stats.starttime)
-            station_group[data_name].attrs["sampling_rate"] = \
-                str(trace.stats.sampling_rate)
+            self._add_trace_write_collective_information(info)
+            self._add_trace_write_independent_information(info, trace)
+
+    def _add_trace_write_independent_information(self, info, trace):
+        """
+        Writes the independent part of a trace to the file.
+
+        :param info:
+        :param trace:
+        :return:
+        """
+        self.__waveforms[info["data_name"]][:] = trace.data
+
+    def _add_trace_write_collective_information(self, info):
+        """
+        Writes the collective part of a trace to the file.
+
+        :param info:
+        :return:
+        """
+        station_name = info["station_name"]
+        if not station_name in self.__waveforms:
+            self.__waveforms.create_group(station_name)
+        group = self.__waveforms[station_name]
+
+        ds = group.create_dataset(**info["dataset_creation_params"])
+        for key, value in info["dataset_attrs"].items():
+            ds.attrs[key] = value
+
+    def _add_trace_get_collective_information(self, trace, tag):
+        """
+        The information required for the collective part of adding a trace.
+
+        This will extract the group name, the parameters of the dataset to
+        be created, and the attributes of the dataset.
+
+        :param trace: The trace to add.
+        :param tag: The tag of the trace.
+        """
+        station_name = "%s.%s" % (trace.stats.network, trace.stats.station)
+        # Generate the name of the data within its station folder.
+        data_name = "{net}.{sta}.{loc}.{cha}__{start}__{end}__{tag}".format(
+            net=trace.stats.network,
+            sta=trace.stats.station,
+            loc=trace.stats.location,
+            cha=trace.stats.channel,
+            start=trace.stats.starttime.strftime("%Y-%m-%dT%H:%M:%S"),
+            end=trace.stats.endtime.strftime("%Y-%m-%dT%H:%M:%S"),
+            tag=tag)
+
+        group_name = "%s/%s" % (station_name, data_name)
+        if group_name in self.__waveforms:
+            msg = "Data '%s' already exists in file. Will not be added!" % \
+                  group_name
+            warnings.warn(msg, SDFWarnings)
+            return
+
+        return {
+            "station_name": station_name,
+            "data_name": group_name,
+            "dataset_creation_params": {
+                "name": data_name,
+                "shape": (trace.stats.npts,),
+                "dtype": trace.data.dtype,
+                "compression": self.__compression[0],
+                "compression_opts": self.__compression[1],
+                "fletcher32": True,
+                "maxshape": (None,)
+            },
+            "dataset_attrs": {
+                "starttime": str(trace.stats.starttime),
+                "sampling_rate": str(trace.stats.sampling_rate)
+            }
+        }
+
+
+    def add_obspy_trace(self, trace, tag):
+        station_group = self.__get_station_group(trace.stats.network,
+                                                 trace.stats.station)
+        # Generate the name of the data within its station folder.
+        data_name = "{net}.{sta}.{loc}.{cha}__{start}__{end}__{tag}".format(
+            net=trace.stats.network,
+            sta=trace.stats.station,
+            loc=trace.stats.location,
+            cha=trace.stats.channel,
+            start=trace.stats.starttime.strftime("%Y-%m-%dT%H:%M:%S"),
+            end=trace.stats.endtime.strftime("%Y-%m-%dT%H:%M:%S"),
+            tag=tag)
+        if data_name in station_group:
+            msg = "Data '%s' already exists in file. Will not be added!" % \
+                data_name
+            warnings.warn(msg, SDFWarnings)
+            return
+        # Actually add the data. Use maxshape to create an extendable data
+        # set.
+        station_group.create_dataset(
+            data_name, data=trace.data, compression=self.__compression[0],
+            compression_opts=self.__compression[1], fletcher32=True,
+            maxshape=(None,))
+        station_group[data_name].attrs["starttime"] = \
+            str(trace.stats.starttime)
+        station_group[data_name].attrs["sampling_rate"] = \
+            str(trace.stats.sampling_rate)
 
     def add_stationxml(self, stationxml):
         """
@@ -386,9 +467,20 @@ class SDFDataSet(object):
             if len(workers_requesting_write) >= 0.5 * self.mpi.comm.size:
                 if self.debug:
                     print("MASTER: initializing metadata synchronization.")
-                for rank in worker_nodes:
-                    self._send_mpi(None, rank, "MASTER_FORCES_WRITE")
+
+                # Send force write msgs to all workers and block until all
+                # have been sent. Don't use blocking send cause then one
+                # will have to wait each time anew and not just once for each.
+                # The message will ready each worker for a collective
+                # operation once its current operation is ready.
+                requests = [self._send_mpi(None, rank, "MASTER_FORCES_WRITE",
+                                           blocking=False)
+                            for rank in worker_nodes]
+                self.mpi.MPI.Request.waitall(requests)
+
                 self._sync_metadata()
+
+                # Reset workers requesting a write.
                 workers_requesting_write[:] = []
                 if self.debug:
                     print("MASTER: done with metadata synchronization.")
@@ -624,9 +716,10 @@ class SDFDataSet(object):
 
             # Set mpi tuple to easy class wide access.
             mpi_ns = collections.namedtuple("mpi_ns", ["comm", "rank",
-                                                       "size"])
+                                                       "size", "MPI"])
             comm = mpi4py.MPI.COMM_WORLD
-            self.__is_mpi = mpi_ns(comm=comm, rank=comm.rank, size=comm.size)
+            self.__is_mpi = mpi_ns(comm=comm, rank=comm.rank,
+                                   size=comm.size, MPI=mpi4py.MPI)
 
         return self.__is_mpi
 
@@ -650,11 +743,12 @@ class SDFDataSet(object):
         """
         tag = MSG_TAGS[tag]
         if blocking:
-            self.mpi.comm.send(obj=obj, dest=dest, tag=tag)
+            value = self.mpi.comm.send(obj=obj, dest=dest, tag=tag)
         else:
-            self.mpi.comm.isend(obj=obj, dest=dest, tag=tag)
+            value = self.mpi.comm.isend(obj=obj, dest=dest, tag=tag)
         if self.debug:
             pretty_sender_log(dest, self.mpi.rank, tag, obj)
+        return value
 
     def _recv_mpi(self, source, tag):
         """
