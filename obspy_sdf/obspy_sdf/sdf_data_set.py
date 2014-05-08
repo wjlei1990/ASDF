@@ -437,6 +437,18 @@ class SDFDataSet(object):
         assert len(station_tags) == len(set(station_tags))
 
         output_data_set = SDFDataSet(output_filename)
+        # Copy all stations.
+        for station_name, station_group in self._waveform_group.items():
+            for tag, data in station_group.items():
+                if tag != "StationXML":
+                    continue
+                if station_name not in output_data_set._waveform_group:
+                    group = output_data_set._waveform_group.create_group(
+                        station_name)
+                else:
+                    group = output_data_set[station_name]
+                station_group.copy(source=data, dest=group,
+                                   name="StationXML")
 
         # Check for MPI, if yes, dispatch to MPI worker, if not dispatch to
         # the multiprocessing handling.
