@@ -341,35 +341,6 @@ class SDFDataSet(object):
             }
         }
 
-
-    def add_obspy_trace(self, trace, tag):
-        station_group = self.__get_station_group(trace.stats.network,
-                                                 trace.stats.station)
-        # Generate the name of the data within its station folder.
-        data_name = "{net}.{sta}.{loc}.{cha}__{start}__{end}__{tag}".format(
-            net=trace.stats.network,
-            sta=trace.stats.station,
-            loc=trace.stats.location,
-            cha=trace.stats.channel,
-            start=trace.stats.starttime.strftime("%Y-%m-%dT%H:%M:%S"),
-            end=trace.stats.endtime.strftime("%Y-%m-%dT%H:%M:%S"),
-            tag=tag)
-        if data_name in station_group:
-            msg = "Data '%s' already exists in file. Will not be added!" % \
-                data_name
-            warnings.warn(msg, SDFWarnings)
-            return
-        # Actually add the data. Use maxshape to create an extendable data
-        # set.
-        station_group.create_dataset(
-            data_name, data=trace.data, compression=self.__compression[0],
-            compression_opts=self.__compression[1], fletcher32=True,
-            maxshape=(None,))
-        station_group[data_name].attrs["starttime"] = \
-            str(trace.stats.starttime)
-        station_group[data_name].attrs["sampling_rate"] = \
-            str(trace.stats.sampling_rate)
-
     def add_stationxml(self, stationxml):
         """
         """
