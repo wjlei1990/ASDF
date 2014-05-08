@@ -41,14 +41,15 @@ MSG_TAGS = [
     "ALL_DONE",
 ]
 
-# Convert to enum like structure.
+# Convert to two-way dict.
 MSG_TAGS = {msg: i  for i, msg in enumerate(MSG_TAGS)}
+MSG_TAGS.update({value: key for key, value in MSG_TAGS.items()})
 
 ReceivedMessage = collections.namedtuple("ReceivedMessage", ["data"])
 
 POISON_PILL = "POISON_PILL"
 
-MAX_MEMORY_PER_WORKER_IN_MB = 10
+MAX_MEMORY_PER_WORKER_IN_MB = 100
 
 input_data_set_container = []
 output_data_set_container = []
@@ -158,7 +159,7 @@ class SDFDataSet(object):
     """
     DataSet object holding
     """
-    def __init__(self, file_object, compression=None):
+    def __init__(self, file_object, compression=None, debug=False):
         """
         :type file_object: filename or open h5py object.
         :param file_object: The filename or object to be written to.
@@ -167,6 +168,7 @@ class SDFDataSet(object):
             which yielded good results in the past. Will only be applied to
             newly added data sets. Existing ones are not touched.
         """
+        self.debug = debug
         if compression not in COMPRESSIONS:
             msg = "Unknown compressions '%s'. Available compressions: \n\t%s" \
                 % (compression, "\n\t".join(sorted(
@@ -466,17 +468,30 @@ class SDFDataSet(object):
         otherwise.
         """
         tag = MSG_TAGS[tag]
-        if self.comm.Iprobe(source=source, tag=tag) is False:
+        if not self.comm.Iprobe(source=source, tag=tag):
             return
-        return ReceivedMessage(self.comm.recv(source=source, tag=tag))
+        msg = ReceivedMessage(self.comm.recv(source=source, tag=tag))
+        # XXX: No clue why this is necessary!
+        while self.comm.Iprobe(source=source, tag=tag):
+            self.comm.recv(source=source, tag=tag)
+        if self.debug:
+            pretty_receiver_log(source, self.rank, tag)
+        return msg
 
-    def _send_mpi(self, obj, dest, tag):
+    def _send_mpi(self, obj, dest, tag, blocking=True):
         tag = MSG_TAGS[tag]
-        self.comm.send(obj=obj, dest=dest, tag=tag)
+        if blocking:
+            self.comm.send(obj=obj, dest=dest, tag=tag)
+        self.comm.isend(obj=obj, dest=dest, tag=tag)
+        if self.debug:
+            pretty_sender_log(dest, self.rank, tag)
 
     def _recv_mpi(self, source, tag):
         tag = MSG_TAGS[tag]
-        return self.comm.recv(source=source, tag=tag)
+        msg = self.comm.recv(source=source, tag=tag)
+        if self.debug:
+            pretty_receiver_log(source, self.rank, tag)
+        return msg
 
     def _dispatch_processing_mpi_master_node(self, process_function,
                                              output_filename, station_tags):
@@ -484,66 +499,69 @@ class SDFDataSet(object):
         The master node. It distributes the jobs and takes care that
         metadata modifying actions are collective.
         """
+        from mpi4py import MPI
+
         worker_nodes = range(1, self.comm.size)
         workers_requesting_write = []
 
         jobs = JobQueueHelper(jobs=station_tags,
                               worker_names=worker_nodes)
 
-        last_print = time.time()
+        __last_print = time.time()
 
+        # Reactive event loop.
         while not jobs.all_done:
-            if time.time() - last_print > 2.0:
-                print jobs
-                last_print = time.time()
-
             time.sleep(0.01)
 
-            # Force writing if more than half of all nodes reached their
-            # memory limit.
-            if len(workers_requesting_write) >= 0.5 * self.comm.size:
-                print "\n\n"
-                print "MASTER STARTS SYNC!!!", workers_requesting_write
-                self._sync_metadata()
-                for rank in worker_nodes:
-                    # Get any additional requests ro write before proceeding.
-                    msg = self._get_msg(rank, "WORKER_REQUESTS_WRITE")
-                    if msg:
-                        print "Master: write request from worker %i ignored" \
-                            % rank
+            # Informative output.
+            if time.time() - __last_print > 2.0:
+                print(jobs)
+                __last_print = time.time()
 
+            if len(workers_requesting_write) >= 0.5 * self.comm.size:
+                if self.debug:
+                    print("MASTER: initializing metadata synchronization.")
+                for rank in worker_nodes:
+                    self._send_mpi(None, rank, "MASTER_FORCES_WRITE")
+                self._sync_metadata()
                 workers_requesting_write[:] = []
+                if self.debug:
+                    print("MASTER: done with metadata synchronization.")
                 continue
 
-            for rank in worker_nodes:
-                # Check if worker reached its memory limit. The worker will
-                # wait until the signal to write the metadata has been sent.
-                if self._get_msg(rank, "WORKER_REQUESTS_WRITE"):
-                    print "Master: Worker %i requested write" % rank
-                    workers_requesting_write.append(rank)
-                    continue
+            # Retrieve any possible message and "dispatch" appropriately.
+            status = MPI.Status()
+            msg = self.comm.recv(source=MPI.ANY_SOURCE, tag=MPI.ANY_TAG,
+                                 status=status)
+            tag = MSG_TAGS[status.tag]
+            source = status.source
 
-                # Check if node needs work.
-                if self._get_msg(rank, "WORKER_REQUESTS_ITEM"):
-                    # Send poison pill if no more work is available. After
-                    # that the worker should not request any more jobs.
-                    if jobs.queue_empty:
-                        self._send_mpi(POISON_PILL, rank, "MASTER_SENDS_ITEM")
-                    else:
-                        # And send a new station tag to process it.
-                        station_tag = jobs.get_job_for_worker(rank)
-                        self._send_mpi(station_tag, rank, "MASTER_SENDS_ITEM")
+            if self.debug:
+                pretty_receiver_log(source, self.rank, status.tag)
 
-                # Check if node is done with work.
-                msg = self._get_msg(rank, "WORKER_DONE_WITH_ITEM")
-                if msg:
-                    station_tag, result = msg.data
-                    jobs.received_job_from_worker(station_tag, result, rank)
+            if tag == "WORKER_REQUESTS_ITEM":
+                # Send poison pill if no more work is available. After
+                # that the worker should not request any more jobs.
+                if jobs.queue_empty:
+                    self._send_mpi(POISON_PILL, source, "MASTER_SENDS_ITEM")
+                else:
+                    # And send a new station tag to process it.
+                    station_tag = jobs.get_job_for_worker(source)
+                    self._send_mpi(station_tag, source, "MASTER_SENDS_ITEM")
 
-        # When no more jobs are left, send "ALL_DONE" to workers to shut
-        # them down.
+            elif tag == "WORKER_DONE_WITH_ITEM":
+                station_tag, result = msg
+                jobs.received_job_from_worker(station_tag, result, source)
+
+            elif tag == "WORKER_REQUESTS_WRITE":
+                workers_requesting_write.append(source)
+
+            else:
+                raise NotImplementedError
+
+        # Shutdown workers.
         for rank in worker_nodes:
-            self.comm.send(0, dest=rank, tag=MSG_TAGS["ALL_DONE"])
+            self._send_mpi(None, rank, "ALL_DONE")
 
     def _dispatch_processing_mpi_worker_node(self, process_function,
                                              output_filename):
@@ -553,67 +571,85 @@ class SDFDataSet(object):
         """
         self.stream_buffer = StreamBuffer()
 
-        poison_pill_received = False
-        waiting_for_write = False
+        worker_state = {
+            "poison_pill_received": False,
+            "waiting_for_write": False,
+            "waiting_for_item": False
+        }
 
         # Loop until the 'ALL_DONE' message has been sent.
         while not self._get_msg(0, "ALL_DONE"):
-            time.sleep(0.05)
+            time.sleep(0.01)
 
             # Check if master requested a write.
             if self._get_msg(0, "MASTER_FORCES_WRITE"):
                 self._sync_metadata()
                 for key, value in self.stream_buffer.items():
                     self._send_mpi((key, str(value)), 0,
-                                   "WORKER_DONE_WITH_ITEM")
+                                   "WORKER_DONE_WITH_ITEM",
+                                   blocking=False)
                 self.stream_buffer.clear()
-                waiting_for_write = False
+                worker_state["waiting_for_write"] = False
 
-            if waiting_for_write is True:
+            if worker_state["waiting_for_write"]:
                 continue
 
-            if poison_pill_received:
+            if worker_state["poison_pill_received"]:
                 continue
 
-            # Send message that the worker requires work.
-            self._send_mpi(None, 0, "WORKER_REQUESTS_ITEM")
-            station_tag = self._recv_mpi(0, "MASTER_SENDS_ITEM")
-
-            # If no more work to be done, store state and keep looping as
-            # stuff still might require to be written.
-            if station_tag == POISON_PILL:
-                if self.stream_buffer:
-                    self._send_mpi(None, 0, "WORKER_REQUESTS_WRITE")
-                poison_pill_received = True
+            if not worker_state["waiting_for_item"]:
+                # Send message that the worker requires work.
+                self._send_mpi(None, 0, "WORKER_REQUESTS_ITEM", blocking=False)
+                worker_state["waiting_for_item"] = True
                 continue
 
-            # Otherwise process the data.
-            stream, inv = self.get_data_for_tag(*station_tag)
-            process_function(stream, inv)
+            msg = self._get_msg(0, "MASTER_SENDS_ITEM")
+            if msg:
+                station_tag = msg.data
+                worker_state["waiting_for_item"] = False
 
-            # Add stream to buffer.
-            self.stream_buffer[station_tag] = stream
+                # If no more work to be done, store state and keep looping as
+                # stuff still might require to be written.
+                if station_tag == POISON_PILL:
+                    if self.stream_buffer:
+                        self._send_mpi(None, 0, "WORKER_REQUESTS_WRITE",
+                                       blocking=False)
+                    worker_state["poison_pill_received"] = True
+                    continue
 
-            # If the buffer is too large, request from the master to stop
-            # the current execution.
-            if self.stream_buffer.get_size() >= \
-                            MAX_MEMORY_PER_WORKER_IN_MB * 1024 ** 2:
-                self._send_mpi(None, 0, "WORKER_REQUESTS_WRITE")
-                print "Worker %i: requests write!" % self.rank
-                waiting_for_write = True
+                # Otherwise process the data.
+                stream, inv = self.get_data_for_tag(*station_tag)
+                process_function(stream, inv)
+
+                # Add stream to buffer.
+                self.stream_buffer[station_tag] = stream
+
+                # If the buffer is too large, request from the master to stop
+                # the current execution.
+                if self.stream_buffer.get_size() >= \
+                                MAX_MEMORY_PER_WORKER_IN_MB * 1024 ** 2:
+                    self._send_mpi(None, 0, "WORKER_REQUESTS_WRITE",
+                                   blocking=False)
+                    worker_state["waiting_for_write"] = True
 
     def _sync_metadata(self):
+
         if hasattr(self, "stream_buffer"):
             sendobj = self.stream_buffer.get_meta()
         else:
             sendobj = None
-        print "%i: Starting allgather" % self.rank
+
         data = self.comm.allgather(sendobj=sendobj)
-        if self.rank != 0:
-            print "Rank %i: size of stream buffer: %.2f MB" % \
-                  (self.rank, self.stream_buffer.get_size() / 1024.0 / 1024.0)
-        else:
-            print "Rank 0"
+        self.comm.barrier()
+
+        # Make sure all remaining write requests are processed before
+        # proceeding.
+        if self.rank == 0:
+            for rank in [1, 2, 3]:
+                msg = self._get_msg(rank, "WORKER_REQUESTS_WRITE")
+                if self.debug and msg:
+                    print("MASTER: Ignoring write request by worker %i" % i)
+
         self.comm.barrier()
 
     def _dispatch_processing_multiprocessing(
@@ -679,7 +715,7 @@ class SDFDataSet(object):
                         stream, inv = \
                             self.input_data_set.get_data_for_tag(station,
                                                                  tag)
-                    print "Processing...", stream
+                    print "Processing..."
                     output_stream = self.processing_function(stream, inv)
 
                     self.input_queue.task_done()
@@ -717,9 +753,15 @@ def apply_processing_multiprocessing(process_function, station, tag):
     #     output_data_set.add_stationxml(inv)
     #     output_data_set.add_waveform_file(output_stream, tag)
 
+@property
+def mpi(self):
+    if hasattr(self, "__is_mpi"):
+        return self.__is_mpi
+    else:
+        self.__is_mpi = self.__is_mpi_env()
+    return self._is_mpi
 
-
-def _is_mpi_env():
+def __is_mpi_env(self):
     """
     Returns True if the current environment is an MPI environment.
     """
@@ -858,3 +900,45 @@ class JobQueueHelper(object):
     @property
     def all_done(self):
         return len(self._all_jobs) == len(self._finished_jobs)
+
+
+def pretty_sender_log(rank, destination, tag):
+    import colorama
+    prefix = colorama.Fore.RED + "sent to      " + colorama.Fore.RESET
+    _pretty_log(prefix, destination, rank, tag)
+
+def pretty_receiver_log(source, rank, tag):
+    import colorama
+    prefix = colorama.Fore.GREEN + "received from" + colorama.Fore.RESET
+    _pretty_log(prefix, rank, source, tag)
+
+def _pretty_log(prefix, first, second, tag):
+    import colorama
+
+    colors = (colorama.Back.WHITE + colorama.Fore.MAGENTA,
+              colorama.Back.WHITE + colorama.Fore.BLUE,
+              colorama.Back.WHITE + colorama.Fore.GREEN,
+              colorama.Back.WHITE + colorama.Fore.YELLOW)
+
+    tag_colors = (
+        colorama.Fore.RED,
+        colorama.Fore.GREEN,
+        colorama.Fore.BLUE,
+        colorama.Fore.YELLOW,
+        colorama.Fore.MAGENTA,
+    )
+
+    tags = [i for i in MSG_TAGS.keys() if isinstance(i, basestring)]
+
+    tag = MSG_TAGS[tag]
+    tag = tag_colors[tags.index(tag) % len(tag_colors)] + tag + \
+          colorama.Style.RESET_ALL
+
+    first = colorama.Fore.YELLOW + "MASTER  " + colorama.Fore.RESET \
+        if first == 0 else colors[first % len(colors)] + \
+        ("WORKER %i" %  first) + colorama.Style.RESET_ALL
+    second = colorama.Fore.YELLOW + "MASTER  " + colorama.Fore.RESET \
+        if second == 0 else colors[second % len(colors)] + \
+                           ("WORKER %i" %  second) + colorama.Style.RESET_ALL
+
+    print("%s %s %s [%s]" % (first, prefix, second, tag))

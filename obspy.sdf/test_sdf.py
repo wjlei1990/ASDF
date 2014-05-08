@@ -9,7 +9,7 @@ path = "/Users/lion/workspace/data/2014_01--SDF_Earthquake_data_set"
 filename = "test_file.h5"
 
 
-data_set = SDFDataSet(filename)
+data_set = SDFDataSet(filename, debug=False)
 print("")
 print data_set
 print("")
