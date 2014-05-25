@@ -34,8 +34,9 @@ def example_data_set(tmpdir):
 
     for filename in glob.glob(os.path.join(data_path, "*.xml")):
         if "quake.xml" in filename:
-            continue
-        data_set.add_stationxml(filename)
+            data_set.add_quakeml(filename)
+        else:
+            data_set.add_stationxml(filename)
 
     # Flush and finish writing.
     del data_set
@@ -62,8 +63,9 @@ def test_data_set_creation(tmpdir):
 
     for filename in glob.glob(os.path.join(data_path, "*.xml")):
         if "quake.xml" in filename:
-            continue
-        data_set.add_stationxml(filename)
+            data_set.add_quakeml(filename)
+        else:
+            data_set.add_stationxml(filename)
 
     # Flush and finish writing.
     del data_set
@@ -91,6 +93,11 @@ def test_data_set_creation(tmpdir):
         inv_file = obspy.read_inventory(
             os.path.join(data_path, "%s.%s..BH*.xml" % station))
         assert inv_file == inv_sdf
+    # Test the event.
+    cat_file = obspy.readEvents(os.path.join(data_path, "quake.xml"))
+    cat_sdf = data_set.events
+    # from IPython.core.debugger import Tracer; Tracer(colors="Linux")()
+    assert cat_file == cat_sdf
 
 
 def test_equality_checks(example_data_set):

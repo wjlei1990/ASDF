@@ -101,13 +101,18 @@ class SDFDataSet(object):
             self.__file.attrs["file_format_version"] = FORMAT_VERSION
 
         # Create the waveform and provenance groups.
-        if not "Waveforms" in self.__file:
+        if "Waveforms" not in self.__file:
             self.__file.create_group("Waveforms")
+        self.waveforms = StationAccessor(self)
 
-        if not "Provenance" in self.__file:
+        if "Provenance" not in self.__file:
             self.__file.create_group("Provenance")
 
-        self.waveforms = StationAccessor(self)
+        # Create the QuakeML dataset if it does not exist.
+        if "QuakeML" not in self.__file:
+            self.__file.create_dataset("QuakeML", dtype=np.dtype("byte"),
+                                       shape=(0,), maxshape=(None,),
+                                       fletcher32=True)
 
         # Force collective init if run in an MPI environment.
         if self.mpi:
@@ -231,6 +236,60 @@ class SDFDataSet(object):
         if not station_name in self._waveform_group:
             self._waveform_group.create_group(station_name)
         return self._waveform_group[station_name]
+
+    def add_quakeml(self, event):
+        """
+        Adds a QuakeML file or existing ObsPy event to the dataset.
+
+        :param event: Filename or existing ObsPy event or catalog object.
+        """
+        if isinstance(event, obspy.core.event.Event):
+            cat = obspy.core.event.Catalog(events=[event])
+        elif isinstance(event, obspy.core.event.Catalog):
+            cat = event
+        else:
+            cat = obspy.readEvents(event, format="quakeml")
+
+        old_cat = self.events
+        existing_resource_ids = set([_i.resource_id.id for _i in old_cat])
+        new_resource_ids = set([_i.resource_id.id for _i in cat])
+        intersection = existing_resource_ids.intersection(new_resource_ids)
+        if intersection:
+            msg = ("Event id(s) %s already present in SDF file. Adding "
+                   "events cancelled")
+            raise ValueError(msg % ", ".join(intersection))
+        old_cat.extend(cat)
+
+        self.events = old_cat
+
+    @property
+    def events(self):
+        data = self.__file["QuakeML"]
+        if not len(data.value):
+            return obspy.core.event.Catalog()
+
+        cat = obspy.readEvents(io.BytesIO(data.value.tostring()),
+                               format="quakeml")
+        return cat
+
+    @events.setter
+    def events(self, event):
+        if isinstance(event, obspy.core.event.Event):
+            cat = obspy.core.event.Catalog(events=[event])
+        elif isinstance(event, obspy.core.event.Catalog):
+            cat = event
+        else:
+            raise TypeError("Must be an ObsPy event or catalog instance")
+
+        temp = io.BytesIO()
+        cat.write(temp, format="quakeml")
+        temp.seek(0, 0)
+        data = np.array(list(temp.read()), dtype="|S1")
+        data.dtype = np.dtype("byte")
+        temp.close()
+
+        self.__file["QuakeML"].resize(data.shape)
+        self.__file["QuakeML"][:] = data
 
     def add_waveform_file(self, waveform, tag):
         """
@@ -390,7 +449,7 @@ class SDFDataSet(object):
                         existing_station_xml.write(temp, format="stationxml")
                         temp.seek(0, 0)
                         data = np.array(list(temp.read()), dtype="|S1")
-                        data.dtype = np.int8
+                        data.dtype = np.dtype("byte")
                         temp.close()
                         # maxshape takes care to create an extendable data set.
                         station_group["StationXML"].resize((len(data.data),))
@@ -406,16 +465,13 @@ class SDFDataSet(object):
                     new_station_xml.write(temp, format="stationxml")
                     temp.seek(0, 0)
                     data = np.array(list(temp.read()), dtype="|S1")
-                    data.dtype = np.int8
+                    data.dtype = np.dtype("byte")
                     temp.close()
                     # maxshape takes care to create an extendable data set.
                     station_group.create_dataset(
                         "StationXML", data=data,
                         maxshape=(None,),
                         fletcher32=True)
-
-    def add_quakeml(self, quakeml):
-        pass
 
     def process(self, process_function, output_filename):
         stations = sorted(self.__file["Waveforms"].keys())
