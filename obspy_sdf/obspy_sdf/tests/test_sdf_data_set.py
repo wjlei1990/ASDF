@@ -1,5 +1,6 @@
 import glob
 import inspect
+import io
 import shutil
 import obspy
 import os
@@ -9,6 +10,7 @@ from obspy_sdf import SDFDataSet
 
 data_dir = os.path.join(os.path.dirname(os.path.abspath(
     inspect.getfile(inspect.currentframe()))), "data")
+
 
 class Namespace(object):
     """
@@ -141,3 +143,82 @@ def test_equality_checks(example_data_set):
     # Test change of keys.
     del data_set_1._waveform_group["AE.113A"]
     assert data_set_1 != data_set_2
+
+
+def test_adding_same_event_twice_raises(tmpdir):
+    """
+    Adding the same event twice raises.
+    """
+    sdf_filename = os.path.join(tmpdir.strpath, "test.h5")
+    data_path = os.path.join(data_dir, "small_sample_data_set")
+
+    data_set = SDFDataSet(sdf_filename)
+
+    # Add once, all good.
+    data_set.add_quakeml(os.path.join(data_path, "quake.xml"))
+    assert len(data_set.events) == 1
+
+    # Adding again should raise an error.
+    with pytest.raises(ValueError):
+        data_set.add_quakeml(os.path.join(data_path, "quake.xml"))
+
+
+def test_adding_event_in_various_manners(tmpdir):
+    """
+    Events can be added either as filenames, open files, BytesIOs, or ObsPy
+    objects. In any case, the result should be the same.
+    """
+    sdf_filename = os.path.join(tmpdir.strpath, "test.h5")
+    data_path = os.path.join(data_dir, "small_sample_data_set")
+    event_filename = os.path.join(data_path, "quake.xml")
+
+    ref_cat = obspy.readEvents(event_filename)
+
+    # Add as filename
+    data_set = SDFDataSet(sdf_filename)
+    assert len(data_set.events) == 0
+    data_set.add_quakeml(event_filename)
+    assert len(data_set.events) == 1
+    assert data_set.events == ref_cat
+    del data_set
+    os.remove(sdf_filename)
+
+    # Add as open file.
+    data_set = SDFDataSet(sdf_filename)
+    assert len(data_set.events) == 0
+    with open(event_filename, "rb") as fh:
+        data_set.add_quakeml(fh)
+    assert len(data_set.events) == 1
+    assert data_set.events == ref_cat
+    del data_set
+    os.remove(sdf_filename)
+
+    # Add as BytesIO.
+    data_set = SDFDataSet(sdf_filename)
+    assert len(data_set.events) == 0
+    with open(event_filename, "rb") as fh:
+        temp = io.BytesIO(fh.read())
+    temp.seek(0, 0)
+    data_set.add_quakeml(temp)
+    assert len(data_set.events) == 1
+    assert data_set.events == ref_cat
+    del data_set
+    os.remove(sdf_filename)
+
+    # Add as ObsPy Catalog.
+    data_set = SDFDataSet(sdf_filename)
+    assert len(data_set.events) == 0
+    data_set.add_quakeml(ref_cat.copy())
+    assert len(data_set.events) == 1
+    assert data_set.events == ref_cat
+    del data_set
+    os.remove(sdf_filename)
+
+    # Add as an ObsPy event.
+    data_set = SDFDataSet(sdf_filename)
+    assert len(data_set.events) == 0
+    data_set.add_quakeml(ref_cat.copy()[0])
+    assert len(data_set.events) == 1
+    assert data_set.events == ref_cat
+    del data_set
+    os.remove(sdf_filename)
