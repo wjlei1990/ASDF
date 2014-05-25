@@ -1,1 +1,2 @@
 doc/_build
+*.egg-info

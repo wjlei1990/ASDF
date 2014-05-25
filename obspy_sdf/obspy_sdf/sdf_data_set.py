@@ -143,7 +143,7 @@ class SDFDataSet(object):
                         np.testing.assert_array_equal(data_set.value,
                                                       other_data_set.value)
                     else:
-                        np.testing.assert_array_almost_equal(
+                        np.testing.assert_allclose(
                             data_set.value, other_data_set.value)
                 except AssertionError:
                     return False

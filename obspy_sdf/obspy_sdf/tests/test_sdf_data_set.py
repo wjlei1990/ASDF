@@ -10,6 +10,14 @@ from obspy_sdf import SDFDataSet
 data_dir = os.path.join(os.path.dirname(os.path.abspath(
     inspect.getfile(inspect.currentframe()))), "data")
 
+class Namespace(object):
+    """
+    Simple helper class offering a namespace.
+    """
+    def __init__(self, **kwargs):
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+
 
 @pytest.fixture
 def example_data_set(tmpdir):
@@ -34,10 +42,7 @@ def example_data_set(tmpdir):
 
     # Return filename and path to tempdir, no need to always create a
     # new one.
-    return {
-        "filename": sdf_filename,
-        "tmpdir": tmpdir.strpath
-    }
+    return Namespace(filename=sdf_filename, tmpdir=tmpdir.strpath)
 
 
 def test_data_set_creation(tmpdir):
@@ -91,8 +96,8 @@ def test_equality_checks(example_data_set):
     """
     Tests the equality operations.
     """
-    filename_1 = example_data_set["filename"]
-    filename_2 = os.path.join(example_data_set["tmpdir"], "new.h5")
+    filename_1 = example_data_set.filename
+    filename_2 = os.path.join(example_data_set.tmpdir, "new.h5")
     shutil.copyfile(filename_1, filename_2)
 
     data_set_1 = SDFDataSet(filename_1)
