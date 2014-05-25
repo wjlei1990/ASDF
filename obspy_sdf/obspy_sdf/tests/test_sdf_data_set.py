@@ -70,7 +70,6 @@ def test_data_set_creation(tmpdir):
 
     # Open once again
     data_set = SDFDataSet(sdf_filename)
-    data_set == data_set
 
     # ObsPy is tested enough to make this comparison meaningful.
     for station in (("AE", "113A"), ("TA", "POKR")):
@@ -79,12 +78,14 @@ def test_data_set_creation(tmpdir):
             getattr(data_set.waveforms, "%s_%s" % station).raw_recording
         stream_file = obspy.read(os.path.join(
             data_path, "%s.%s.*.mseed" % station))
-        # Delete the file format specific stats attributes.
+        # Delete the file format specific stats attributes. These are
+        # meaningless inside SDF data sets.
         for trace in stream_file:
             del trace.stats.mseed
             del trace.stats._format
+        assert stream_sdf == stream_file
 
-        # Now the Inventory data.
+        # Test the inventory data.
         inv_sdf = \
             getattr(data_set.waveforms, "%s_%s" % station).StationXML
         inv_file = obspy.read_inventory(
