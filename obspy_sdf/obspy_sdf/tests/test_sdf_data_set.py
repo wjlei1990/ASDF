@@ -1,4 +1,5 @@
 import glob
+import h5py
 import inspect
 import io
 import shutil
@@ -7,6 +8,8 @@ import os
 import pytest
 
 from obspy_sdf import SDFDataSet
+from obspy_sdf.header import FORMAT_VERSION, FORMAT_NAME
+
 
 data_dir = os.path.join(os.path.dirname(os.path.abspath(
     inspect.getfile(inspect.currentframe()))), "data")
@@ -222,3 +225,19 @@ def test_adding_event_in_various_manners(tmpdir):
     assert data_set.events == ref_cat
     del data_set
     os.remove(sdf_filename)
+
+
+def test_assert_format_and_version_number_are_written(tmpdir):
+    """
+    Check that the version number and file format name are correctly written.
+    """
+    sdf_filename = os.path.join(tmpdir.strpath, "test.h5")
+    # Create empty data set.
+    data_set = SDFDataSet(sdf_filename)
+    # Flush and write.
+    del data_set
+
+    # Open again and assert name and version number.
+    with h5py.File(sdf_filename, "r") as hdf5_file:
+        assert hdf5_file.attrs["file_format_version"] == FORMAT_VERSION
+        assert hdf5_file.attrs["file_format"] == FORMAT_NAME
