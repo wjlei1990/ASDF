@@ -2,7 +2,6 @@ import glob
 import h5py
 import inspect
 import io
-import mock
 import shutil
 import obspy
 import os
@@ -257,9 +256,9 @@ def test_dot_accessors(example_data_set):
 
     # Get the contents, this also asserts that tab completions works.
     assert sorted(dir(data_set.waveforms)) == ["AE_113A", "TA_POKR"]
-    assert sorted(dir(data_set.waveforms.AE_113A))  == \
+    assert sorted(dir(data_set.waveforms.AE_113A)) == \
         ["StationXML", "raw_recording"]
-    assert sorted(dir(data_set.waveforms.TA_POKR))  == \
+    assert sorted(dir(data_set.waveforms.TA_POKR)) == \
         ["StationXML", "raw_recording"]
 
     # Actually check the contents.
@@ -284,9 +283,9 @@ def test_dot_accessors(example_data_set):
     assert waveform == waveform_file
 
     assert data_set.waveforms.AE_113A.StationXML == \
-       obspy.read_inventory(os.path.join(data_path, "AE.113A..BH*.xml"))
+        obspy.read_inventory(os.path.join(data_path, "AE.113A..BH*.xml"))
     assert data_set.waveforms.TA_POKR.StationXML == \
-           obspy.read_inventory(os.path.join(data_path, "TA.POKR..BH*.xml"))
+        obspy.read_inventory(os.path.join(data_path, "TA.POKR..BH*.xml"))
 
 
 def test_stationxml_is_invalid_tag_name(tmpdir):
@@ -391,3 +390,23 @@ def test_tag_iterator(example_data_set):
     for st, inv in data_set.itertag("random"):
         count += 1
     assert count == 0
+
+
+def test_processing_multiprocessing(example_data_set):
+    """
+    Tests the processing using multiprocessing.
+    """
+    def null_processing(st, inv):
+        return st
+
+    data_set = SDFDataSet(example_data_set.filename)
+    output_filename = os.path.join(example_data_set.tmpdir, "output.h5")
+    # Do not actually do anything. Apply an empty function.
+    data_set.process(null_processing, output_filename,
+                     {"raw_recording": "raw_recording"})
+
+    del data_set
+    data_set = SDFDataSet(example_data_set.filename)
+    out_data_set = SDFDataSet(output_filename)
+
+    assert data_set == out_data_set
