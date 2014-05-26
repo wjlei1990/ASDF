@@ -359,7 +359,7 @@ def test_event_association_is_persistent_through_processing(example_data_set):
     st = data_set.waveforms.TA_POKR.raw_recording
     event_id = st[0].stats.sdf.event_id
 
-    st.taper()
+    st.taper(max_percentage=0.05, type="cosine")
 
     data_set.add_waveforms(st, tag="processed")
     processed_st = data_set.waveforms.TA_POKR.processed

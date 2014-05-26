@@ -460,6 +460,10 @@ class SDFDataSet(object):
                 "sampling_rate": str(trace.stats.sampling_rate)
             }
         }
+        if event_id is None and \
+                hasattr(trace.stats, "sdf") and \
+                hasattr(trace.stats.sdf, "event_id"):
+            event_id = str(trace.stats.sdf.event_id.id)
         if event_id:
             info["dataset_attrs"]["event_id"] = str(event_id)
         return info
