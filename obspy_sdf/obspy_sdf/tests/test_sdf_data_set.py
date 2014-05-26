@@ -364,3 +364,29 @@ def test_event_association_is_persistent_through_processing(example_data_set):
     data_set.add_waveforms(st, tag="processed")
     processed_st = data_set.waveforms.TA_POKR.processed
     assert event_id == processed_st[0].stats.sdf.event_id
+
+
+def test_tag_iterator(example_data_set):
+    """
+    Tests the tag iterator.
+    """
+    data_set = SDFDataSet(example_data_set.filename)
+
+    expected_ids = ["AE.113A..BHE", "AE.113A..BHN", "AE.113A..BHZ",
+                    "TA.POKR..BHE", "TA.POKR..BHN", "TA.POKR..BHZ"]
+
+    for st, inv in data_set.itertag("raw_recording"):
+        for tr in st:
+            assert tr.id in expected_ids
+            expected_ids.remove(tr.id)
+            assert bool(inv.select(
+                network=tr.stats.network, station=tr.stats.station,
+                channel=tr.stats.channel, location=tr.stats.location).networks)
+
+    assert expected_ids == []
+
+    # It will only return matching tags.
+    count = 0
+    for st, inv in data_set.itertag("random"):
+        count += 1
+    assert count == 0

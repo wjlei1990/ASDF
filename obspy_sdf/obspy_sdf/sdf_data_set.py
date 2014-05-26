@@ -543,6 +543,27 @@ class SDFDataSet(object):
                         maxshape=(None,),
                         fletcher32=True)
 
+    def itertag(self, tag):
+        """
+        Iterate over stations. Yields a tuple of an obspy Stream object and
+        an inventory object for the station information. The returned
+        inventory object can be None.
+
+        >>> for st, inv in data_set.itertag("raw_recording"):
+        ...     st.detrend("linear")
+        """
+        for station in dir(self.waveforms):
+            station = getattr(self.waveforms, station)
+            if tag not in dir(station):
+                continue
+            if "StationXML" in dir(station):
+                inv = station.StationXML
+            else:
+                inv = None
+            st = getattr(station, tag)
+            yield st, inv
+        raise StopIteration
+
     def process(self, process_function, output_filename):
         stations = sorted(self.__file["Waveforms"].keys())
         # Get all possible station and waveform tag combinations and let
