@@ -121,7 +121,7 @@ def test_equality_checks(example_data_set):
     assert not (data_set_1 != data_set_2)
 
     # A tiny change at an arbitrary place should trigger an inequality.
-    for tag, data_array in data_set_2.__waveform_group["AE.113A"].items():
+    for tag, data_array in data_set_2._waveform_group["AE.113A"].items():
         if tag != "StationXML":
             break
     data_array[1] += 2.0
@@ -136,7 +136,7 @@ def test_equality_checks(example_data_set):
     assert not (data_set_1 != data_set_2)
 
     # Also check the StationXML.
-    data_array = data_set_2.__waveform_group["AE.113A"]["StationXML"]
+    data_array = data_set_2._waveform_group["AE.113A"]["StationXML"]
     data_array[1] += 2.0
     assert not (data_set_1 == data_set_2)
     assert data_set_1 != data_set_2
@@ -145,7 +145,7 @@ def test_equality_checks(example_data_set):
     assert not (data_set_1 != data_set_2)
 
     # Test change of keys.
-    del data_set_1.__waveform_group["AE.113A"]
+    del data_set_1._waveform_group["AE.113A"]
     assert data_set_1 != data_set_2
 
 
