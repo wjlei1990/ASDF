@@ -349,6 +349,10 @@ class SDFDataSet(object):
             mandatory for all traces and facilitates identification of the data
             within one SDF volume.
         """
+        tag = tag.strip()
+        if tag.lower() == "stationxml":
+            msg = "Tag '%s' is invalid." % tag
+            raise ValueError(msg)
         # The next function expects some kind of iterable that yields traces.
         if isinstance(waveform, obspy.Trace):
             waveform = [waveform]
