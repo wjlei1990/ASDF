@@ -35,14 +35,15 @@ def example_data_set(tmpdir):
 
     data_set = SDFDataSet(sdf_filename)
 
-    for filename in glob.glob(os.path.join(data_path, "*.mseed")):
-        data_set.add_waveforms(filename, tag="raw_recording")
-
     for filename in glob.glob(os.path.join(data_path, "*.xml")):
         if "quake.xml" in filename:
             data_set.add_quakeml(filename)
         else:
             data_set.add_stationxml(filename)
+
+    for filename in glob.glob(os.path.join(data_path, "*.mseed")):
+        data_set.add_waveforms(filename, tag="raw_recording",
+                               event_id=data_set.events[0])
 
     # Flush and finish writing.
     del data_set
@@ -348,3 +349,18 @@ def test_saving_event_id(tmpdir):
         assert tr.stats.sdf.event_id.getReferredObject() == event
     del data_set
     os.remove(filename)
+
+def test_event_association_is_persistent_through_processing(example_data_set):
+    """
+    Processing a file with an associated event and storing it again should
+    keep the association.
+    """
+    data_set = SDFDataSet(example_data_set.filename)
+    st = data_set.waveforms.TA_POKR.raw_recording
+    event_id = st[0].stats.sdf.event_id
+
+    st.taper()
+
+    data_set.add_waveforms(st, tag="processed")
+    processed_st = data_set.waveforms.TA_POKR.processed
+    assert event_id == processed_st[0].stats.sdf.event_id

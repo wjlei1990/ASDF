@@ -558,8 +558,6 @@ def trace_to_graph(trace, name, email, institution):
 
 
 
-
-
 if __name__ == "__main__":
     import obspy
     tr = obspy.read()[0]
