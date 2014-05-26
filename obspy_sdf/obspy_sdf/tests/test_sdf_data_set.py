@@ -2,6 +2,7 @@ import glob
 import h5py
 import inspect
 import io
+import mock
 import shutil
 import obspy
 import os
@@ -35,7 +36,7 @@ def example_data_set(tmpdir):
     data_set = SDFDataSet(sdf_filename)
 
     for filename in glob.glob(os.path.join(data_path, "*.mseed")):
-        data_set.add_waveform_file(filename, tag="raw_recording")
+        data_set.add_waveforms(filename, tag="raw_recording")
 
     for filename in glob.glob(os.path.join(data_path, "*.xml")):
         if "quake.xml" in filename:
@@ -64,7 +65,7 @@ def test_data_set_creation(tmpdir):
     data_set = SDFDataSet(sdf_filename)
 
     for filename in glob.glob(os.path.join(data_path, "*.mseed")):
-        data_set.add_waveform_file(filename, tag="raw_recording")
+        data_set.add_waveforms(filename, tag="raw_recording")
 
     for filename in glob.glob(os.path.join(data_path, "*.xml")):
         if "quake.xml" in filename:
@@ -120,7 +121,7 @@ def test_equality_checks(example_data_set):
     assert not (data_set_1 != data_set_2)
 
     # A tiny change at an arbitrary place should trigger an inequality.
-    for tag, data_array in data_set_2._waveform_group["AE.113A"].items():
+    for tag, data_array in data_set_2.__waveform_group["AE.113A"].items():
         if tag != "StationXML":
             break
     data_array[1] += 2.0
@@ -135,7 +136,7 @@ def test_equality_checks(example_data_set):
     assert not (data_set_1 != data_set_2)
 
     # Also check the StationXML.
-    data_array = data_set_2._waveform_group["AE.113A"]["StationXML"]
+    data_array = data_set_2.__waveform_group["AE.113A"]["StationXML"]
     data_array[1] += 2.0
     assert not (data_set_1 == data_set_2)
     assert data_set_1 != data_set_2
@@ -144,7 +145,7 @@ def test_equality_checks(example_data_set):
     assert not (data_set_1 != data_set_2)
 
     # Test change of keys.
-    del data_set_1._waveform_group["AE.113A"]
+    del data_set_1.__waveform_group["AE.113A"]
     assert data_set_1 != data_set_2
 
 
@@ -241,3 +242,38 @@ def test_assert_format_and_version_number_are_written(tmpdir):
     with h5py.File(sdf_filename, "r") as hdf5_file:
         assert hdf5_file.attrs["file_format_version"] == FORMAT_VERSION
         assert hdf5_file.attrs["file_format"] == FORMAT_NAME
+
+
+def test_dot_accessors(example_data_set):
+    """
+    Tests the dot accessors for waveforms and stations.
+    """
+    data_path = os.path.join(data_dir, "small_sample_data_set")
+    data_set = SDFDataSet(example_data_set.filename)
+
+    # Get the contents, this also asserts that tab completions works.
+    assert sorted(dir(data_set.waveforms)) == ["AE_113A", "TA_POKR"]
+    assert sorted(dir(data_set.waveforms.AE_113A))  == \
+        ["StationXML", "raw_recording"]
+    assert sorted(dir(data_set.waveforms.TA_POKR))  == \
+        ["StationXML", "raw_recording"]
+
+    # Actually check the contents.
+    waveform = data_set.waveforms.AE_113A.raw_recording.sort()
+    waveform_file = obspy.read(os.path.join(data_path, "AE.*.mseed")).sort()
+    for trace in waveform_file:
+        del trace.stats.mseed
+        del trace.stats._format
+    assert waveform == waveform_file
+
+    waveform = data_set.waveforms.TA_POKR.raw_recording.sort()
+    waveform_file = obspy.read(os.path.join(data_path, "TA.*.mseed")).sort()
+    for trace in waveform_file:
+        del trace.stats.mseed
+        del trace.stats._format
+    assert waveform == waveform_file
+
+    assert data_set.waveforms.AE_113A.StationXML == \
+       obspy.read_inventory(os.path.join(data_path, "AE.113A..BH*.xml"))
+    assert data_set.waveforms.TA_POKR.StationXML == \
+           obspy.read_inventory(os.path.join(data_path, "TA.POKR..BH*.xml"))

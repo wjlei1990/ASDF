@@ -46,14 +46,16 @@ class SDFDataSet(object):
         :param debug: If True, print debug messages. Defaults to False.
         """
         self.debug = debug
+
+        # Deal with compression settings.
         if compression not in COMPRESSIONS:
             msg = "Unknown compressions '%s'. Available compressions: \n\t%s" \
                 % (compression, "\n\t".join(sorted(
                 [str(i) for i in COMPRESSIONS.keys()])))
             raise Exception(msg)
         self.__compression = COMPRESSIONS[compression]
-
-        # Turn off compression for parallel I/O.
+        # Turn off compression for parallel I/O. Any already written
+        # compressed data will be fine.
         if self.__compression[0] and self.mpi:
             msg = "Compression will be disabled as parallel HDF5 does not " \
                   "support compression"
@@ -79,6 +81,11 @@ class SDFDataSet(object):
                 self.__file = h5py.File(file_object, "a", driver="mpio",
                                         comm=self.mpi.comm)
 
+        # Workaround to HDF5 only storing the relative path by default. Does
+        # not work in all cases but should be good enough.
+        self.__original_filename = os.path.abspath(self.__file.filename)
+
+        # Write file format and version information to the file.
         if "file_format" in self.__file.attrs:
             if self.__file.attrs["file_format"] != FORMAT_NAME:
                 msg = "Not a '%s' file." % FORMAT_NAME
@@ -86,13 +93,13 @@ class SDFDataSet(object):
             if "file_format_version" not in self.__file.attrs:
                 msg = ("No file format version given for file '%s'. The "
                        "program will continue but the result is undefined." %
-                       self.__file.filename)
+                       self.filename)
                 warnings.warn(msg, SDFWarnings)
             elif self.__file.attrs["file_format_version"] != FORMAT_VERSION:
                 msg = ("The file '%s' has version number '%s'. The reader "
                        "expects version '%s'. The program will continue but "
                        "the result is undefined." % (
-                    self.__file.filename,
+                    self.filename,
                     self.__file.attrs["file_format_version"],
                     FORMAT_VERSION))
                 warnings.warn(msg, SDFWarnings)
@@ -103,24 +110,25 @@ class SDFDataSet(object):
         # Create the waveform and provenance groups.
         if "Waveforms" not in self.__file:
             self.__file.create_group("Waveforms")
-        self.waveforms = StationAccessor(self)
-
         if "Provenance" not in self.__file:
             self.__file.create_group("Provenance")
 
-        # Create the QuakeML dataset if it does not exist.
+        # Easy access to the waveforms.
+        self.waveforms = StationAccessor(self)
+
+        # Create the QuakeML data set if it does not exist.
         if "QuakeML" not in self.__file:
             self.__file.create_dataset("QuakeML", dtype=np.dtype("byte"),
                                        shape=(0,), maxshape=(None,),
                                        fletcher32=True)
 
-        # Force collective init if run in an MPI environment.
+        # Force synchronous init if run in an MPI environment.
         if self.mpi:
             self.mpi.comm.barrier()
 
     def __del__(self):
         """
-        Attempts to close the HDF5 file.
+        Cleanup. Force flushing and close the file.
         """
         try:
             self.__file.flush()
@@ -131,6 +139,9 @@ class SDFDataSet(object):
 
     def __eq__(self, other):
         """
+        More or less comprehensive equality check. Potentially quite slow as
+        it checks all data.
+
         :type other:`~obspy_sdf.SDFDDataSet`
         """
         if type(self) != type(other):
@@ -138,6 +149,8 @@ class SDFDataSet(object):
         if self._waveform_group.keys() != other._waveform_group.keys():
             return False
         if self._provenance_group.keys() != other._provenance_group.keys():
+            return False
+        if self.events != other.events:
             return False
         for station, group in self._waveform_group.items():
             other_group = other._waveform_group[station]
@@ -167,7 +180,41 @@ class SDFDataSet(object):
 
     @property
     def filename(self):
-        return self.__file.filename
+        """
+        Get the path of the underlying file on the filesystem. Works in most
+        circumstances.
+        """
+        return self.__original_filename
+
+    @property
+    def mpi(self):
+        """
+        Returns a named tuple with ``comm``, ``rank``, ``size``, and ``MPI``
+        if run with MPI and False otherwise.
+        """
+        if hasattr(self, "__is_mpi"):
+            return self.__is_mpi
+        self.__is_mpi = is_mpi_env()
+
+        # If it actually is an mpi environment, set the communicator and the
+        # rank.
+        if self.__is_mpi:
+            # Check if HDF5 has been complied with parallel I/O.
+            if not h5py.get_config().mpi:
+                msg = "Running under MPI requires HDF5/h5py to be complied " \
+                      "with support for parallel I/O."
+                raise RuntimeError(msg)
+
+            import mpi4py
+
+            # Set mpi tuple to easy class wide access.
+            mpi_ns = collections.namedtuple("mpi_ns", ["comm", "rank",
+                                                       "size", "MPI"])
+            comm = mpi4py.MPI.COMM_WORLD
+            self.__is_mpi = mpi_ns(comm=comm, rank=comm.rank,
+                                   size=comm.size, MPI=mpi4py.MPI)
+
+        return self.__is_mpi
 
     @property
     def events(self):
@@ -271,10 +318,10 @@ class SDFDataSet(object):
         return inv
 
     def __str__(self):
-        filesize = sizeof_fmt(os.path.getsize(self.__file.filename))
+        filesize = sizeof_fmt(os.path.getsize(self.filename))
         ret = "{format} file: '{filename}' ({size})".format(
             format=FORMAT_NAME,
-            filename=self.__file.filename,
+            filename=os.path.relpath(self.filename),
             size=filesize
         )
         ret += "\n\tContains data from {len} stations.".format(
@@ -291,7 +338,7 @@ class SDFDataSet(object):
             self._waveform_group.create_group(station_name)
         return self._waveform_group[station_name]
 
-    def add_waveform_file(self, waveform, tag):
+    def add_waveforms(self, waveform, tag):
         """
         Adds one or more waveforms to the file.
 
@@ -804,27 +851,6 @@ class SDFDataSet(object):
             process.join()
 
         return
-
-    @property
-    def mpi(self):
-        if hasattr(self, "__is_mpi"):
-            return self.__is_mpi
-        else:
-            self.__is_mpi = is_mpi_env()
-
-        # If it actually is an mpi environment, set the communicator and the
-        # rank.
-        if self.__is_mpi:
-            import mpi4py
-
-            # Set mpi tuple to easy class wide access.
-            mpi_ns = collections.namedtuple("mpi_ns", ["comm", "rank",
-                                                       "size", "MPI"])
-            comm = mpi4py.MPI.COMM_WORLD
-            self.__is_mpi = mpi_ns(comm=comm, rank=comm.rank,
-                                   size=comm.size, MPI=mpi4py.MPI)
-
-        return self.__is_mpi
 
     def _get_msg(self, source, tag):
         """

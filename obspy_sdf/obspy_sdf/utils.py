@@ -47,7 +47,8 @@ class StationAccessor(object):
 
     def __dir__(self):
         __waveforms = self.__data_set()._waveform_group
-        return [_i.replace(".", "_") for _i in __waveforms.iterkeys()]
+        return sorted(set(
+            [_i.replace(".", "_") for _i in __waveforms.iterkeys()]))
 
 
 class WaveformAccessor(object):
@@ -78,7 +79,7 @@ class WaveformAccessor(object):
         directory.extend([_i.split("__")[-1]
                           for _i in __station.iterkeys()
                           if _i != "StationXML"])
-        return directory
+        return sorted(set(directory))
 
 
 def is_mpi_env():

@@ -32,7 +32,7 @@ data_set.process(process_function, output_filename="new.h5")
 # print "Adding MiniSEED files"
 # for file in glob.iglob(os.path.join(path, "MiniSEED", "*.mseed")):
 #     print file
-#     data_set.add_waveform_file(file, tag="raw_recording")
+#     data_set.add_waveforms(file, tag="raw_recording")
 #
 # print "Adding StationXML files"
 # for file in glob.iglob(os.path.join(path, "StationXML", "*.xml")):
