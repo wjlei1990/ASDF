@@ -91,6 +91,9 @@ def test_data_set_creation(tmpdir):
         for trace in stream_file:
             del trace.stats.mseed
             del trace.stats._format
+        for trace in stream_sdf:
+            del trace.stats.sdf
+            del trace.stats._format
         assert stream_sdf == stream_file
 
         # Test the inventory data.
@@ -264,12 +267,18 @@ def test_dot_accessors(example_data_set):
     for trace in waveform_file:
         del trace.stats.mseed
         del trace.stats._format
+    for trace in waveform:
+        del trace.stats.sdf
+        del trace.stats._format
     assert waveform == waveform_file
 
     waveform = data_set.waveforms.TA_POKR.raw_recording.sort()
     waveform_file = obspy.read(os.path.join(data_path, "TA.*.mseed")).sort()
     for trace in waveform_file:
         del trace.stats.mseed
+        del trace.stats._format
+    for trace in waveform:
+        del trace.stats.sdf
         del trace.stats._format
     assert waveform == waveform_file
 
