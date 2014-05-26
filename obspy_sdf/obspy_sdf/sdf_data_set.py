@@ -270,9 +270,25 @@ class SDFDataSet(object):
 
         self.events = old_cat
 
-    def get_waveform(self, waveform_name):
+    def get_data_for_tag(self, station_name, tag):
         """
-        Retrieves the waveform for a certain tag name as a Trace object.
+        Returns the waveform and station data for the requested station and
+        tag.
+
+        :param station_name:
+        :param tag:
+        :return: tuple
+        """
+        station_name = station_name.replace(".", "_")
+        station = getattr(self.waveforms, station_name)
+        st = getattr(station, tag)
+        inv = getattr(station, "StationXML")
+        return st, inv
+
+    def _get_waveform(self, waveform_name):
+        """
+        Retrieves the waveform for a certain tag name as a Trace object. For
+        internal use only, use the dot accessors for outside access.
         """
         network, station, location, channel = waveform_name.split(".")[:4]
         channel = channel[:channel.find("__")]
@@ -285,32 +301,21 @@ class SDFDataSet(object):
         tr.stats.station = station
         tr.stats.location = location
         tr.stats.channel = channel
+        # Set some format specific details.
+        tr.stats._format = FORMAT_NAME
+        details = obspy.core.util.AttribDict()
+        setattr(tr.stats, FORMAT_NAME.lower(), details)
+        details.format_version = FORMAT_VERSION
+        if "event_id" in data.attrs:
+            details.event_id = obspy.core.event.ResourceIdentifier(
+                data.attrs["event_id"])
         return tr
 
-    def get_data_for_tag(self, station_name, tag):
-        """
-        Returns the waveform and station data for the requested station and
-        tag.
-
-        :param station_name:
-        :param tag:
-        :return: tuple
-        """
-        contents = self.__file["Waveforms"][station_name].keys()
-        traces = []
-        for content in contents:
-            if content.endswith("__%s" % tag):
-                traces.append(self.get_waveform(content))
-
-        st = obspy.Stream(traces=traces)
-        inv = self.get_station(station_name)
-
-        return st, inv
-
-    def get_station(self, station_name):
+    def _get_station(self, station_name):
         """
         Retrieves the specified StationXML as an obspy.station.Inventory
-        object.
+        object. For internal use only, use the dot accessors for outside
+        access.
         """
         data = self.__file["Waveforms"][station_name]["StationXML"]
         inv = obspy.read_inventory(io.BytesIO(data.value.tostring()),
@@ -329,16 +334,7 @@ class SDFDataSet(object):
         )
         return ret
 
-    def __get_station_group(self, network_code, station_code):
-        """
-        Helper function.
-        """
-        station_name = "%s.%s" % (network_code, station_code)
-        if not station_name in self._waveform_group:
-            self._waveform_group.create_group(station_name)
-        return self._waveform_group[station_name]
-
-    def add_waveforms(self, waveform, tag):
+    def add_waveforms(self, waveform, tag, event_id=None):
         """
         Adds one or more waveforms to the file.
 
@@ -349,6 +345,18 @@ class SDFDataSet(object):
             mandatory for all traces and facilitates identification of the data
             within one SDF volume.
         """
+        # Extract the event_id from the different possibilities.
+        if event_id:
+            if isinstance(event_id, obspy.core.event.Event):
+                event_id = str(event_id.resource_id.id)
+            elif isinstance(event_id, obspy.core.event.ResourceIdentifier):
+                event_id = str(event_id.id)
+            elif isinstance(event_id, basestring):
+                pass
+            else:
+                msg = "Invalid type for event_id."
+                raise TypeError(msg)
+
         tag = tag.strip()
         if tag.lower() == "stationxml":
             msg = "Tag '%s' is invalid." % tag
@@ -366,7 +374,8 @@ class SDFDataSet(object):
         for trace in waveform:
             # Complicated multi-step process but it enables one to use
             # parallel I/O with the same functions.
-            info = self._add_trace_get_collective_information(trace, tag)
+            info = self._add_trace_get_collective_information(
+                trace, tag, event_id=event_id)
             if info is None:
                 continue
             self._add_trace_write_collective_information(info)
@@ -398,7 +407,8 @@ class SDFDataSet(object):
         for key, value in info["dataset_attrs"].items():
             ds.attrs[key] = value
 
-    def _add_trace_get_collective_information(self, trace, tag):
+    def _add_trace_get_collective_information(self, trace, tag,
+                                              event_id=None):
         """
         The information required for the collective part of adding a trace.
 
@@ -433,7 +443,7 @@ class SDFDataSet(object):
         else:
             fletcher32 = True
 
-        return {
+        info = {
             "station_name": station_name,
             "data_name": group_name,
             "dataset_creation_params": {
@@ -450,6 +460,9 @@ class SDFDataSet(object):
                 "sampling_rate": str(trace.stats.sampling_rate)
             }
         }
+        if event_id:
+            info["dataset_attrs"]["event_id"] = str(event_id)
+        return info
 
     def add_stationxml(self, stationxml):
         """
@@ -463,8 +476,10 @@ class SDFDataSet(object):
             network_code = network.code
             for station in network:
                 station_code = station.code
-                station_group = self.__get_station_group(network_code,
-                                                         station_code)
+                station_name = "%s.%s" % (network_code, station_code)
+                if not station_name in self._waveform_group:
+                    self._waveform_group.create_group(station_name)
+                station_group = self._waveform_group[station_name]
                 # Get any already existing StationXML file. This will always
                 # only contain a single station!
                 if "StationXML" in station_group:

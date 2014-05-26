@@ -66,10 +66,10 @@ class WaveformAccessor(object):
             __station = self.__data_set()._waveform_group[self.__station_name]
             keys = [_i for _i in __station.iterkeys()
                     if _i.endswith("__" + item)]
-            traces = [self.__data_set().get_waveform(_i) for _i in keys]
+            traces = [self.__data_set()._get_waveform(_i) for _i in keys]
             return obspy.Stream(traces=traces)
         else:
-            return self.__data_set().get_station(self.__station_name)
+            return self.__data_set()._get_station(self.__station_name)
 
     def __dir__(self):
         __station = self.__data_set()._waveform_group[self.__station_name]

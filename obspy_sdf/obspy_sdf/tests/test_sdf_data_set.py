@@ -295,3 +295,47 @@ def test_stationxml_is_invalid_tag_name(tmpdir):
 
     # Adding with a proper tag works just fine.
     data_set.add_waveforms(st, tag="random_waveform")
+
+
+def test_saving_event_id(tmpdir):
+    """
+    Tests that the event_id can be saved and retrieved automatically.
+    """
+    data_path = os.path.join(data_dir, "small_sample_data_set")
+    filename = os.path.join(tmpdir.strpath, "example.h5")
+    event = obspy.readEvents(os.path.join(data_path, "quake.xml"))[0]
+
+    # Add the event object, and associate the waveform with it.
+    data_set = SDFDataSet(filename)
+    data_set.add_quakeml(event)
+    waveform = obspy.read(os.path.join(data_path, "TA.*.mseed")).sort()
+    data_set.add_waveforms(waveform, "raw_recording", event_id=event)
+    st = data_set.waveforms.TA_POKR.raw_recording
+    for tr in st:
+        assert tr.stats.sdf.event_id.getReferredObject() == event
+    del data_set
+    os.remove(filename)
+
+    # Add as a string.
+    data_set = SDFDataSet(filename)
+    data_set.add_quakeml(event)
+    waveform = obspy.read(os.path.join(data_path, "TA.*.mseed")).sort()
+    data_set.add_waveforms(waveform, "raw_recording",
+                           event_id=str(event.resource_id.id))
+    st = data_set.waveforms.TA_POKR.raw_recording
+    for tr in st:
+        assert tr.stats.sdf.event_id.getReferredObject() == event
+    del data_set
+    os.remove(filename)
+
+    # Add as a resource identifier object.
+    data_set = SDFDataSet(filename)
+    data_set.add_quakeml(event)
+    waveform = obspy.read(os.path.join(data_path, "TA.*.mseed")).sort()
+    data_set.add_waveforms(waveform, "raw_recording",
+                           event_id=event.resource_id)
+    st = data_set.waveforms.TA_POKR.raw_recording
+    for tr in st:
+        assert tr.stats.sdf.event_id.getReferredObject() == event
+    del data_set
+    os.remove(filename)
