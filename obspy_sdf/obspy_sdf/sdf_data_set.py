@@ -11,6 +11,9 @@ Prototype implementation for a new file format using Python, ObsPy, and HDF5.
 """
 from __future__ import absolute_import
 
+import os
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+
 import copy
 import collections
 import h5py
@@ -20,9 +23,25 @@ import math
 import multiprocessing
 import numpy as np
 import obspy
-import os
 import warnings
 import time
+
+
+# Handling numpy linked against accelerate.
+config_info = str([value for key, value in
+                   np.__config__.__dict__.iteritems()
+                   if key.endswith("_info")]).lower()
+
+if "accelerate" in config_info or "veclib" in config_info:
+    msg = ("NumPy linked against 'Accelerate.framework'. Multiprocessing "
+           "will be disabled. See "
+           "https://github.com/obspy/obspy/wiki/Notes-on-Parallel-Processing-"
+           "with-Python-and-ObsPy for more information.")
+    warnings.warn(msg)
+    # Disable by replacing with dummy implementation using threads.
+    from multiprocessing import dummy
+    multiprocessing = dummy
+
 
 from .header import SDFException, SDFWarnings, COMPRESSIONS, FORMAT_NAME, \
     FORMAT_VERSION, MSG_TAGS, MAX_MEMORY_PER_WORKER_IN_MB, POISON_PILL
@@ -34,10 +53,10 @@ class SDFDataSet(object):
     """
     DataSet object holding
     """
-    def __init__(self, file_object, compression=None, debug=False):
+    def __init__(self, filename, compression=None, debug=False):
         """
-        :type file_object: filename or open h5py object.
-        :param file_object: The filename or object to be written to.
+        :type filename: str
+        :param filename: The filename of the HDF5 file (to be).
         :type compression: str, optional
         :param compression: The compression to use. Defaults to 'szip-nn-10'
             which yielded good results in the past. Will only be applied to
@@ -64,26 +83,13 @@ class SDFDataSet(object):
 
         # Open file or take an already open HDF5 file object.
         if not self.mpi:
-            if isinstance(file_object, h5py.File):
-                self.__file = file_object
-                if self.__file.mode != "r+":
-                    raise ValueError("The file pointer must have mode 'r+'.")
-            else:
-                self.__file = h5py.File(file_object, "a")
+            self.__file = h5py.File(filename, "a")
         else:
-            if isinstance(file_object, h5py.File):
-                self.__file = file_object
-                if self.__file.mode != "r+" or self.__file.driver != "mpio":
-                    raise ValueError("A file pointer passed with MPI enabled "
-                                     "must have mode 'r+' and the 'mpio' "
-                                     "driver")
-            else:
-                self.__file = h5py.File(file_object, "a", driver="mpio",
-                                        comm=self.mpi.comm)
+            self.__file = h5py.File(filename, "a", driver="mpio",
+                                    comm=self.mpi.comm)
 
-        # Workaround to HDF5 only storing the relative path by default. Does
-        # not work in all cases but should be good enough.
-        self.__original_filename = os.path.abspath(self.__file.filename)
+        # Workaround to HDF5 only storing the relative path by default.
+        self.__original_filename = os.path.abspath(filename)
 
         # Write file format and version information to the file.
         if "file_format" in self.__file.attrs:
@@ -131,8 +137,8 @@ class SDFDataSet(object):
         Cleanup. Force flushing and close the file.
         """
         try:
-            self.__file.flush()
-            self.__file.close()
+            self._flush()
+            self._close()
         # Value Error is raised if the file has already been closed.
         except ValueError:
             pass
@@ -243,7 +249,14 @@ class SDFDataSet(object):
         temp.close()
 
         self.__file["QuakeML"].resize(data.shape)
+
         self.__file["QuakeML"][:] = data
+
+    def _flush(self):
+        self.__file.flush()
+
+    def _close(self):
+        self.__file.close()
 
     def add_quakeml(self, event):
         """
@@ -564,7 +577,10 @@ class SDFDataSet(object):
             yield st, inv
         raise StopIteration
 
-    def process(self, process_function, output_filename):
+    def process(self, process_function, output_filename, tag_map):
+        if os.path.exists(output_filename):
+            msg = "Output file '%s' already exists." % output_filename
+            raise ValueError(msg)
         stations = sorted(self.__file["Waveforms"].keys())
         # Get all possible station and waveform tag combinations and let
         # each process read the data it needs.
@@ -578,6 +594,8 @@ class SDFDataSet(object):
                     continue
                 tags.add(waveform.split("__")[-1])
             for tag in tags:
+                if tag not in tag_map.keys():
+                    continue
                 station_tags.append((station, tag))
 
         # XXX: Remove once some other structure has been established.
@@ -597,14 +615,18 @@ class SDFDataSet(object):
                 station_group.copy(source=data, dest=group,
                                    name="StationXML")
 
+        # Copy events.
+        if self.events:
+            output_data_set.events = self.events
+
         # Check for MPI, if yes, dispatch to MPI worker, if not dispatch to
         # the multiprocessing handling.
         if self.mpi:
             self._dispatch_processing_mpi(process_function, output_data_set,
-                                          station_tags)
+                                          station_tags, tag_map)
         else:
             self._dispatch_processing_multiprocessing(
-                process_function, output_data_set, station_tags)
+                process_function, output_data_set, station_tags, tag_map)
 
     def _dispatch_processing_mpi(self, process_function, output_data_set,
                                  station_tags):
@@ -815,15 +837,27 @@ class SDFDataSet(object):
         self.mpi.comm.barrier()
 
     def _dispatch_processing_multiprocessing(
-            self, process_function, output_data_set, station_tags):
+            self, process_function, output_data_set, station_tags, tag_map):
 
         input_filename = self.filename
         output_filename = output_data_set.filename
 
+        # Make sure all HDF5 file handles are closed before fork() is called.
+        # Might become irrelevant if the HDF5 library sees some changes but
+        # right now it is necessary.
+        self._flush()
+        self._close()
+        output_data_set._flush()
+        output_data_set._close()
+        del output_data_set
+
+        # Lock for input and output files. Probably not needed for the input
+        # files but better be safe.
         input_file_lock = multiprocessing.Lock()
         output_file_lock = multiprocessing.Lock()
 
-        cpu_count = multiprocessing.cpu_count()
+        cpu_count = min(multiprocessing.cpu_count(), len(station_tags))
+        # cpu_count = 1
 
         # Create the input queue containing the jobs.
         input_queue = multiprocessing.JoinableQueue(
@@ -855,12 +889,6 @@ class SDFDataSet(object):
                 self.output_file_lock = out_lock
                 self.processing_function = processing_function
 
-                with self.input_file_lock:
-                    self.input_data_set = SDFDataSet(input_filename)
-
-                with self.output_file_lock:
-                    self.output_data_set = SDFDataSet(output_filename)
-
             def run(self):
                 while True:
                     stationtag = self.input_queue.get(timeout=1)
@@ -869,14 +897,23 @@ class SDFDataSet(object):
                         break
 
                     station, tag = stationtag
-                    print station, tag
 
                     with self.input_file_lock:
+                        input_data_set = SDFDataSet(self.input_filename)
                         stream, inv = \
-                            self.input_data_set.get_data_for_tag(station,
-                                                                 tag)
-                    print "Processing..."
+                            input_data_set.get_data_for_tag(station, tag)
+                        input_data_set._flush()
+                        input_data_set._close()
+                        del input_data_set
+
                     output_stream = self.processing_function(stream, inv)
+
+                    if output_stream:
+                        with self.output_file_lock:
+                            output_data_set = SDFDataSet(self.output_filename)
+                            output_data_set.add_waveforms(
+                                output_stream, tag=tag_map[tag])
+                            del output_data_set
 
                     self.input_queue.task_done()
 
@@ -893,6 +930,8 @@ class SDFDataSet(object):
 
         for process in processes:
             process.join()
+
+        SDFDataSet.__init__(self, self.__original_filename)
 
         return
 
