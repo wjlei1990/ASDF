@@ -277,3 +277,21 @@ def test_dot_accessors(example_data_set):
        obspy.read_inventory(os.path.join(data_path, "AE.113A..BH*.xml"))
     assert data_set.waveforms.TA_POKR.StationXML == \
            obspy.read_inventory(os.path.join(data_path, "TA.POKR..BH*.xml"))
+
+
+def test_stationxml_is_invalid_tag_name(tmpdir):
+    """
+    StationXML is an invalid waveform tag.
+    """
+    filename = os.path.join(tmpdir.strpath, "example.h5")
+
+    data_set = SDFDataSet(filename)
+    st = obspy.read()
+
+    with pytest.raises(ValueError):
+        data_set.add_waveforms(st, tag="StationXML")
+    with pytest.raises(ValueError):
+        data_set.add_waveforms(st, tag="stationxml")
+
+    # Adding with a proper tag works just fine.
+    data_set.add_waveforms(st, tag="random_waveform")
