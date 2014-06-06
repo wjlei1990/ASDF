@@ -828,7 +828,7 @@ class SDFDataSet(object):
         # Make sure all remaining write requests are processed before
         # proceeding.
         if self.mpi.rank == 0:
-            for rank in [1, 2, 3]:
+            for rank in xrange(1, self.mpi.size):
                 msg = self._get_msg(rank, "WORKER_REQUESTS_WRITE")
                 if self.debug and msg:
                     print("MASTER: Ignoring write request by worker %i" %
