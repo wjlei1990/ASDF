@@ -1,0 +1,3 @@
+pydot
+lxml
+-e git@github.com:krischer/prov.git@prov-xml#egg=prov
