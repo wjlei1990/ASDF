@@ -1,2 +1,4 @@
 doc/_build
+doc/code/xml
+doc/code/dot
 *.egg-info
