@@ -1,31 +1,27 @@
 import os
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
 
-import glob
+import itertools
 
-from sdf_data_set import SDFDataSet
-
-path = "/Users/lion/workspace/data/2014_01--SDF_Earthquake_data_set"
-filename = "test_file.h5"
+from obspy_sdf import SDFDataSet
 
 
+filename = "ccs.h5"
 data_set = SDFDataSet(filename)
-if not data_set.mpi or data_set.mpi.rank == 0:
-    print(data_set)
-    print("")
 
 
-import time
-import random
+stations = [("TA", "BA"), ("BW", "FURT"), ("HEL", "LO")]
 
-def process_function(stream, inventory):
-    stream.detrend("linear")
-    stream.decimate(factor=5)
-    stream.filter("lowpass", freq=2.0)
-    stream.attach_response(inventory)
-    stream.remove_response(output="VEL")
 
-data_set.process(process_function, output_filename="new.h5")
+for station_1, station_2 in itertools.combinations(stations, 2):
+    print station_1, station_2
+
+# for station_pair in station_pair_generator():
+#     cc = get_cc(station_pair)
+#     data_set.add_auxiliary_data(cc, data_type="cross_correlation",
+#                               tag=station_pair.get_tag(),
+#                               options={"window_length": ...,
+#                                        "correlation_type", ...})
 
 
 

@@ -46,7 +46,8 @@ if "accelerate" in config_info or "veclib" in config_info:
 from .header import SDFException, SDFWarnings, COMPRESSIONS, FORMAT_NAME, \
     FORMAT_VERSION, MSG_TAGS, MAX_MEMORY_PER_WORKER_IN_MB, POISON_PILL
 from .utils import is_mpi_env, StationAccessor, sizeof_fmt, ReceivedMessage,\
-    pretty_receiver_log, pretty_sender_log, JobQueueHelper, StreamBuffer
+    pretty_receiver_log, pretty_sender_log, JobQueueHelper, StreamBuffer, \
+    AuxiliaryDataGroupAccessor, AuxiliaryDataContainer
 
 
 class SDFDataSet(object):
@@ -118,15 +119,18 @@ class SDFDataSet(object):
             self.__file.create_group("Waveforms")
         if "Provenance" not in self.__file:
             self.__file.create_group("Provenance")
+        if "AuxiliaryData" not in self.__file:
+            self.__file.create_group("AuxiliaryData")
 
         # Easy access to the waveforms.
         self.waveforms = StationAccessor(self)
+        self.auxiliary_data = AuxiliaryDataGroupAccessor(self)
 
         # Create the QuakeML data set if it does not exist.
         if "QuakeML" not in self.__file:
             self.__file.create_dataset("QuakeML", dtype=np.dtype("byte"),
                                        shape=(0,), maxshape=(None,),
-                                       fletcher32=True)
+                                       fletcher32=not bool(self.mpi))
 
         # Force synchronous init if run in an MPI environment.
         if self.mpi:
@@ -182,7 +186,11 @@ class SDFDataSet(object):
 
     @property
     def _provenance_group(self):
-        return self.__file["Waveforms"]
+        return self.__file["Provenance"]
+
+    @property
+    def _auxiliary_data_group(self):
+        return self.__file["AuxiliaryData"]
 
     @property
     def filename(self):
@@ -212,6 +220,9 @@ class SDFDataSet(object):
                 raise RuntimeError(msg)
 
             import mpi4py
+
+            if not mpi4py.MPI.Is_initialized():
+                mpi4py.MPI.Init()
 
             # Set mpi tuple to easy class wide access.
             mpi_ns = collections.namedtuple("mpi_ns", ["comm", "rank",
@@ -257,6 +268,92 @@ class SDFDataSet(object):
 
     def _close(self):
         self.__file.close()
+
+    def add_auxiliary_data(self, data, data_type, tag, parameters,
+                         provenance=None):
+        """
+        Adds auxiliary data to the file.
+
+        :param data: The actual data as a n-dimensional numpy array.
+        :param data_type: The type of data, think of it like a subfolder.
+        :param tag: The tag of the data. Must be unique per data_type.
+        :param parameters: Any additional options, as a Python dictionary.
+        :param provenance:
+        :return:
+        """
+        # Complicated multi-step process but it enables one to use
+        # parallel I/O with the same functions.
+        info = self._add_auxiliary_data_get_collective_information(
+            data, data_type, tag, parameters, provenance)
+        if info is None:
+            return
+        self._add_auxiliary_data_write_collective_information(info)
+        self._add_auxiliary_data_write_independent_information(info, data)
+
+    def _add_auxiliary_data_get_collective_information(
+            self, data, data_type, tag, parameters, provenance=None):
+        """
+        The information required for the collective part of adding some
+        auxiliary data.
+
+        This will extract the group name, the parameters of the dataset to
+        be created, and the attributes of the dataset.
+        """
+        group_name = "%s/%s" % (data_type, tag)
+        if group_name in self._auxiliary_data_group:
+            msg = "Data '%s' already exists in file. Will not be added!" % \
+                  group_name
+            warnings.warn(msg, SDFWarnings)
+            return
+
+        # XXX: Figure out why this is necessary. It should work according to
+        # the specs.
+        if self.mpi:
+            fletcher32 = False
+        else:
+            fletcher32 = True
+
+        info = {
+            "data_name": group_name,
+            "data_type": data_type,
+            "dataset_creation_params": {
+                "name": tag,
+                "shape": data.shape,
+                "dtype": data.dtype,
+                "compression": self.__compression[0],
+                "compression_opts": self.__compression[1],
+                "fletcher32": fletcher32,
+                "maxshape": (None,)
+            },
+            "dataset_attrs": parameters,
+        }
+        return info
+
+    def _add_auxiliary_data_write_independent_information(self, info, data):
+        """
+        Writes the independent part of auxiliary data to the file.
+
+        :param info:
+        :param trace:
+        :return:
+        """
+        self._auxiliary_data_group[info["data_name"]][:] = data
+
+    def _add_auxiliary_data_write_collective_information(self, info):
+        """
+        Writes the collective part of auxiliary data to the file.
+
+        :param info:
+        :return:
+        """
+        data_type = info["data_type"]
+        if not data_type in self._auxiliary_data_group:
+            self._auxiliary_data_group.create_group(data_type)
+        group = self._auxiliary_data_group[data_type]
+
+        ds = group.create_dataset(**info["dataset_creation_params"])
+        for key, value in info["dataset_attrs"].items():
+            ds.attrs[key] = value
 
     def add_quakeml(self, event):
         """
@@ -335,6 +432,12 @@ class SDFDataSet(object):
             format="stationxml")
         return inv
 
+    def _get_auxiliary_data(self, data_type, tag):
+        group = self._auxiliary_data_group[data_type][tag]
+        return AuxiliaryDataContainer(
+            data=group, data_type=data_type, tag=tag,
+            parameters={i: j for i, j in group.attrs.items()})
+
     def __str__(self):
         filesize = sizeof_fmt(os.path.getsize(self.filename))
         ret = "{format} file: '{filename}' ({size})".format(
@@ -342,9 +445,13 @@ class SDFDataSet(object):
             filename=os.path.relpath(self.filename),
             size=filesize
         )
-        ret += "\n\tContains data from {len} stations.".format(
+        ret += "\n\tContains waveform data from {len} stations.".format(
             len=len(self.__file["Waveforms"])
         )
+        if len(self.auxiliary_data):
+            ret += "\n\tContains %i type(s) of auxiliary data: %s" % (
+                len(self.auxiliary_data),
+                ", ".join(sorted(dir(self.auxiliary_data))))
         return ret
 
     def add_waveforms(self, waveform, tag, event_id=None):
@@ -556,6 +663,38 @@ class SDFDataSet(object):
                         maxshape=(None,),
                         fletcher32=True)
 
+    def validate(self):
+        """
+        Validates and SDF file. It currently checks that each waveform file
+        has a corresponding station file.
+        """
+        summary = {"no_station_information": 0, "no_waveforms": 0,
+                   "good_stations": 0}
+        for station_id in dir(self.waveforms):
+            station = getattr(self.waveforms, station_id)
+            contents = dir(station)
+            if not contents:
+                continue
+            if not "StationXML" in contents and contents:
+                print("No station information available for station '%s'" %
+                      station_id)
+                summary["no_station_information"] += 1
+                continue
+            contents.remove("StationXML")
+            if not contents:
+                print("Station with no waveforms: '%s'" % station_id)
+                summary["no_waveforms"] += 1
+                continue
+            summary["good_stations"] += 1
+
+        print("\nChecked %i stations:" % len(dir(self.waveforms)))
+        print("\t%i stations have no available station information" %
+              summary["no_station_information"])
+        print("\t%i stations with no waveforms" %
+              summary["no_waveforms"])
+        print("\t%i good stations" % summary["good_stations"])
+
+
     def itertag(self, tag):
         """
         Iterate over stations. Yields a tuple of an obspy Stream object and
@@ -588,6 +727,8 @@ class SDFDataSet(object):
         for station in stations:
             # Get the station and all possible tags.
             waveforms = self.__file["Waveforms"][station].keys()
+            if not "StationXML" in waveforms:
+                continue
             tags = set()
             for waveform in waveforms:
                 if waveform == "StationXML":
@@ -600,6 +741,8 @@ class SDFDataSet(object):
 
         # XXX: Remove once some other structure has been established.
         assert len(station_tags) == len(set(station_tags))
+        if not station_tags:
+            raise ValueError("No data matching the tag map found.")
 
         output_data_set = SDFDataSet(output_filename)
         # Copy all stations.
@@ -629,18 +772,22 @@ class SDFDataSet(object):
                 process_function, output_data_set, station_tags, tag_map)
 
     def _dispatch_processing_mpi(self, process_function, output_data_set,
-                                 station_tags):
+                                 station_tags, tag_map):
+
+        # Make sure all processes enter here.
+        self.mpi.comm.barrier()
 
         if self.mpi.rank == 0:
             self._dispatch_processing_mpi_master_node(process_function,
                                                       output_data_set,
-                                                      station_tags)
+                                                      station_tags, tag_map)
         else:
             self._dispatch_processing_mpi_worker_node(process_function,
-                                                      output_data_set)
+                                                      output_data_set, tag_map)
 
     def _dispatch_processing_mpi_master_node(self, process_function,
-                                             output_dataset, station_tags):
+                                             output_dataset, station_tags,
+                                             tag_map):
         """
         The master node. It distributes the jobs and takes care that
         metadata modifying actions are collective.
@@ -650,10 +797,13 @@ class SDFDataSet(object):
         worker_nodes = range(1, self.mpi.comm.size)
         workers_requesting_write = []
 
-        jobs = JobQueueHelper(jobs=station_tags[:9],
+        jobs = JobQueueHelper(jobs=station_tags,
                               worker_names=worker_nodes)
 
         __last_print = time.time()
+
+        print("Launching processing using MPI on %i processors." %
+              self.mpi.comm.size)
 
         # Reactive event loop.
         while not jobs.all_done:
@@ -724,7 +874,7 @@ class SDFDataSet(object):
         print(jobs)
 
     def _dispatch_processing_mpi_worker_node(self, process_function,
-                                             output_dataset):
+                                             output_dataset, tag_map):
         """
         A worker node. It gets jobs, processes them and periodically waits
         until a collective metadata update operation has happened.
@@ -857,7 +1007,6 @@ class SDFDataSet(object):
         output_file_lock = multiprocessing.Lock()
 
         cpu_count = min(multiprocessing.cpu_count(), len(station_tags))
-        # cpu_count = 1
 
         # Create the input queue containing the jobs.
         input_queue = multiprocessing.JoinableQueue(
@@ -895,6 +1044,8 @@ class SDFDataSet(object):
                     if stationtag == POISON_PILL:
                         self.input_queue.task_done()
                         break
+                    import time
+                    print("Processing!!!", time.time())
 
                     station, tag = stationtag
 
@@ -910,6 +1061,7 @@ class SDFDataSet(object):
 
                     if output_stream:
                         with self.output_file_lock:
+                            print "Writing!!!!!!"
                             output_data_set = SDFDataSet(self.output_filename)
                             output_data_set.add_waveforms(
                                 output_stream, tag=tag_map[tag])
@@ -924,6 +1076,9 @@ class SDFDataSet(object):
                                      input_filename, output_filename,
                                      input_file_lock, output_file_lock,
                                      process_function))
+
+        print("Launching processing using multiprocessing on %i cores." %
+              cpu_count)
 
         for process in processes:
             process.start()

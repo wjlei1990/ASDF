@@ -1,6 +1,8 @@
+import abc
 import cgi
 import collections
 from lxml import etree
+import networkx as nx
 import pydot
 import re
 from uuid import uuid4
@@ -32,45 +34,12 @@ def _get_tag(name, namespace=None):
     return "{%s}%s" % (namespace, name)
 
 
-class SeisProvGraph(object):
+class SeisProvGraph(nx.DiGraph):
     """
     Class used to represent seismological provenance graphs. The used
     notation is the one defined by W3C PROV.
     """
-    def __init__(self):
-        self.__nodes = []
-        self.__edges = []
-
-    def add_node(self, node):
-        """
-        Adds a node to the graph.
-        """
-        if node in self.__nodes:
-            msg = "Node '%s' already in graph. Will not be added again."
-            warnings.warn(msg)
-            return
-        existing_ids = [_i.id for _i in self.__nodes]
-        if node.id in existing_ids:
-            msg = "A node with this id already exists in the graph."
-            raise ValueError(msg)
-        self.__nodes.append(node)
-
-    def add_edge(self, edge):
-        """
-        Adds an edge to the graph. Both ends of the edge must already exist
-        in the graph.
-        """
-        if edge.origin not in self.__nodes:
-            msg = "Origin of edge not contained in graph."
-            raise ValueError(msg)
-        elif edge.destination not in self.__nodes:
-            msg = "Destination of edge not contained in graph."
-            raise ValueError(msg)
-        if edge in self.__edges:
-            msg = "Edge '%s' already in graph. Will not be added again."
-            warnings.warn(msg)
-            return
-        self.__edges.append(edge)
+    def add_node(self, n, attr_dict=None, **attr):
 
     def create_and_add_edge(self, origin, destination, connection_type):
         edge = Connection(connection_type, origin, destination)
@@ -230,49 +199,29 @@ class Connection(object):
 
 
 
-class Node(object):
+class SeisProvNode(object):
     """
     A generic node object in the graph.
 
     A node is identified by its id which must be unique in each graph. The
     uniqueness must be guaranteed by some outside logic.
 
-    Each Node futhermore has inbound and outbound connections.
+    Each SeisProvNode futhermore has inbound and outbound connections.
     """
-    def __init__(self, id, label=None,
-                 in_connections=None, out_connections=None):
+    __metaclass__ = abc.ABCMeta
+
+    def __init__(self, id, label=None, attr_dict=None):
         self.id = id
         self.label = label or id
-        self.in_connections = []
-        self.out_connections = []
-        if in_connections:
-            self.in_connectisns.extend(in_connections)
-        if out_connections:
-            self.out_connectisns.extend(out_connections)
 
-    def connect_to(self, other_node, connection_type):
-        """
-        Create a new connection with a node in this objects past.
+        if attr_dict is None:
+            attr_dict = {}
 
-        :param other_node: The node which represents part of the history of
-            the current node.
-        :param connection_type: The type of connection to be created.
-        """
-        connection = Connection(connection_type, self, other_node)
-        self.out_connections.append(connection)
-        other_node.in_connections.append(connection)
+        self.__attr_dict = attr_dict
 
-    def connect_from(self, other_node, connection_type):
-        """
-        Create a new connection with a node in this objects future.
-
-        :param other_node: The node which represents the future of the
-            current node.
-        :param connection_type: The type of connection to be created.
-        """
-        connection = Connection(connection_type, other_node, self)
-        self.in_connections.append(connection)
-        other_node.out_connections.append(connection)
+    def __hash__(self):
+        return hash(str(self.id) + str(self.label) +
+                    str(sorted(self.__attr_dict.items())))
 
     def _get_info(self):
         return {}
@@ -283,12 +232,12 @@ class Node(object):
         """
         self.connect_to(Agent, connection_type)
 
+    @abc.abstractmethod
     def _get_xml_tag(self):
-        raise NotImplementedError
+        pass
 
 
-
-class Entity(Node):
+class Entity(SeisProvNode):
     """
     Class representing a W3C Prov entity. It has a name and a specific
     entity type which is meant to be defined by a subclass.
@@ -319,15 +268,27 @@ class Entity(Node):
         return _get_tag("entity", NS_PROV)
 
 
-class Activity(Node):
+class Activity(SeisProvNode):
     """
     Class representing a W3C PROV Activity.
     """
-    def __init__(self, id, label=None):
-        super(Activity, self).__init__(id=id, label=label)
+    def __init__(self, id, label=None, attr_dict=None):
+        super(Activity, self).__init__(id=id, label=label,
+                                       attr_dict=attr_dict)
 
     def get_style(self):
         return PROV_REC_ACTIVITY
+
+
+class Agent(SeisProvNode):
+    """
+    Class representing a W3C PROV Agent.
+    """
+    def __init__(self, id, label=None):
+        super(Agent, self).__init__(id=id, label=label)
+
+    def get_style(self):
+        return PROV_REC_AGENT
 
 
 class SeismicProcessingActivity(Activity):
@@ -351,17 +312,6 @@ class SeismicProcessingActivity(Activity):
 
     def _get_xml_tag(self):
         return _get_tag("seismicProcessing", NS_SEIS_PROV)
-
-
-class Agent(Node):
-    """
-    Class representing a W3C PROV Agent.
-    """
-    def __init__(self, id, label=None):
-        super(Agent, self).__init__(id=id, label=label)
-
-    def get_style(self):
-        return PROV_REC_AGENT
 
 
 class SoftwareAgent(Agent):
@@ -559,18 +509,18 @@ def trace_to_graph(trace, name, email, institution):
 
 
 if __name__ == "__main__":
-    import obspy
-    tr = obspy.read()[0]
-    tr.detrend("linear")
-    tr.filter("lowpass", freq=2.0)
-    tr.decimate(2)
-    tr.integrate()
-
-    trace_to_graph(tr, "Lion Krischer",
-                   "krischer[at]geophysik.uni-muenchen.de",
-                   "LMU")
-    import sys
-    sys.exit()
+    # import obspy
+    # tr = obspy.read()[0]
+    # tr.detrend("linear")
+    # tr.filter("lowpass", freq=2.0)
+    # tr.decimate(2)
+    # tr.integrate()
+    #
+    # trace_to_graph(tr, "Lion Krischer",
+    #                "krischer[at]geophysik.uni-muenchen.de",
+    #                "LMU")
+    # import sys
+    # sys.exit()
 
 
 
@@ -689,4 +639,4 @@ Mtp:         0""".strip())
 
 
     graph.toXML()
-    graph.plot("simulation.svg")
+    # graph.plot("simulation.svg")

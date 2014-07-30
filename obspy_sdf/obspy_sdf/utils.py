@@ -29,6 +29,69 @@ def sizeof_fmt(num):
     return "%3.1f %s" % (num, "TB")
 
 
+class AuxiliaryDataContainer(object):
+    def __init__(self, data, data_type, tag, parameters):
+        self.data = data
+        self.data_type = data_type
+        self.tag = tag
+        self.parameters = parameters
+
+    def __str__(self):
+        return (
+            "Auxiliary Data of Type '{data_type}'\n"
+            "\tTag: '{tag}'\n"
+            "\tData shape: '{data_shape}', dtype: '{dtype}'\n"
+            "\tParameters:\n\t\t{parameters}"
+            .format(data_type=self.data_type, data_shape=self.data.shape,
+                    dtype=self.data.dtype, tag=self.tag,
+                    parameters="\n\t\t".join(["%s: %s" % (_i[0], _i[1])
+                                              for _i in
+                        sorted(self.parameters.items(), key=lambda x: x[0])])))
+
+
+class AuxiliaryDataAccessor(object):
+    """
+    Helper class facilitating access to the actual waveforms and stations.
+    """
+    def __init__(self, auxiliary_data_type, sdf_data_set):
+        # Use weak references to not have any dangling references to the HDF5
+        # file around.
+        self.__auxiliary_data_type = auxiliary_data_type
+        self.__data_set = weakref.ref(sdf_data_set)
+
+    def __getattr__(self, item):
+        return self.__data_set()._get_auxiliary_data(
+            self.__auxiliary_data_type, item.replace("___", "."))
+
+    def __dir__(self):
+        __group = self.__data_set()._auxiliary_data_group[
+            self.__auxiliary_data_type]
+        return sorted([_i.replace(".", "___") for _i in __group.keys()])
+
+
+class AuxiliaryDataGroupAccessor(object):
+    """
+    Helper class to facilitate access to the auxiliary data types.
+    """
+    def __init__(self, sdf_data_set):
+        # Use weak references to not have any dangling references to the HDF5
+        # file around.
+        self.__data_set = weakref.ref(sdf_data_set)
+
+    def __getattr__(self, item):
+        __auxiliary_data_group = self.__data_set()._auxiliary_data_group
+        if item not in __auxiliary_data_group:
+            raise AttributeError
+        return AuxiliaryDataAccessor(item, self.__data_set())
+
+    def __dir__(self):
+        __auxiliary_group = self.__data_set()._auxiliary_data_group
+        return sorted(__auxiliary_group.keys())
+
+    def __len__(self):
+        return len(self.__dir__())
+
+
 class StationAccessor(object):
     """
     Helper class to facilitate access to the waveforms and stations.
@@ -37,7 +100,6 @@ class StationAccessor(object):
         # Use weak references to not have any dangling references to the HDF5
         # file around.
         self.__data_set = weakref.ref(sdf_data_set)
-
 
     def __getattr__(self, item):
         __waveforms = self.__data_set()._waveform_group
@@ -49,6 +111,9 @@ class StationAccessor(object):
         __waveforms = self.__data_set()._waveform_group
         return sorted(set(
             [_i.replace(".", "_") for _i in __waveforms.iterkeys()]))
+
+    def __len__(self):
+        return len(self.__dir__())
 
 
 class WaveformAccessor(object):
@@ -148,7 +213,6 @@ class Job(object):
                                                  str(self.result))
 
 
-
 class JobQueueHelper(object):
     """
     A simple helper class managing job distribution to workers.
@@ -237,10 +301,12 @@ def pretty_sender_log(rank, destination, tag, payload):
     prefix = colorama.Fore.RED + "sent to      " + colorama.Fore.RESET
     _pretty_log(prefix, destination, rank, tag, payload)
 
+
 def pretty_receiver_log(source, rank, tag, payload):
     import colorama
     prefix = colorama.Fore.GREEN + "received from" + colorama.Fore.RESET
     _pretty_log(prefix, rank, source, tag, payload)
+
 
 def _pretty_log(prefix, first, second, tag, payload):
     import colorama
@@ -275,5 +341,3 @@ def _pretty_log(prefix, first, second, tag, payload):
                             ("WORKER %i" %  second) + colorama.Style.RESET_ALL
 
     print("%s %s %s [%s] -- %s" % (first, prefix, second, tag, str(payload)))
-
-
