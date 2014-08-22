@@ -1,6 +1,6 @@
 # ASDF
 
-Welcome to the repository of the **A**daptable **S**eismic **D**ata **F**ormat.
+Welcome to the repository of the **A** daptable **S** eismic **D** ata **F** ormat.
 Please refer to the documentation for more details.
 
 [Documentation](http://asdf.readthedocs.org)
