@@ -1,4 +1,9 @@
 #!/usr/bin/env python
+if isinstance(stream, (io.StringIO, io.BytesIO)):
+    if isinstance(stream, (io.StringIO, io.BytesIO)):
+    if isinstance(stream, (io.StringIO, io.BytesIO)):
+    if isinstance(stream, (io.StringIO, io.BytesIO)):
+    if isinstance(stream, (io.StringIO, io.BytesIO)):
 # -*- coding: utf-8 -*-
 """
 Prototype implementation for a new file format using Python, ObsPy, and HDF5.
