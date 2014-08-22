@@ -1,13 +1,13 @@
-class SDFException(Exception):
+class ASDFException(Exception):
     """
-    Generic exception for the Python SDF implementation.
+    Generic exception for the Python ASDF implementation.
     """
     pass
 
 
-class SDFWarnings(UserWarning):
+class ASDFWarnings(UserWarning):
     """
-    Generic SDF warning.
+    Generic ASDF warning.
     """
     pass
 
@@ -33,7 +33,7 @@ COMPRESSIONS = {
 }
 
 
-FORMAT_NAME = "SDF"
+FORMAT_NAME = "ASDF"
 FORMAT_VERSION = "0.0.1b"
 
 # MPI message tags used for communication.

@@ -53,11 +53,11 @@ class AuxiliaryDataAccessor(object):
     """
     Helper class facilitating access to the actual waveforms and stations.
     """
-    def __init__(self, auxiliary_data_type, sdf_data_set):
+    def __init__(self, auxiliary_data_type, asdf_data_set):
         # Use weak references to not have any dangling references to the HDF5
         # file around.
         self.__auxiliary_data_type = auxiliary_data_type
-        self.__data_set = weakref.ref(sdf_data_set)
+        self.__data_set = weakref.ref(asdf_data_set)
 
     def __getattr__(self, item):
         return self.__data_set()._get_auxiliary_data(
@@ -73,10 +73,10 @@ class AuxiliaryDataGroupAccessor(object):
     """
     Helper class to facilitate access to the auxiliary data types.
     """
-    def __init__(self, sdf_data_set):
+    def __init__(self, asdf_data_set):
         # Use weak references to not have any dangling references to the HDF5
         # file around.
-        self.__data_set = weakref.ref(sdf_data_set)
+        self.__data_set = weakref.ref(asdf_data_set)
 
     def __getattr__(self, item):
         __auxiliary_data_group = self.__data_set()._auxiliary_data_group
@@ -96,10 +96,10 @@ class StationAccessor(object):
     """
     Helper class to facilitate access to the waveforms and stations.
     """
-    def __init__(self, sdf_data_set):
+    def __init__(self, asdf_data_set):
         # Use weak references to not have any dangling references to the HDF5
         # file around.
-        self.__data_set = weakref.ref(sdf_data_set)
+        self.__data_set = weakref.ref(asdf_data_set)
 
     def __getattr__(self, item):
         __waveforms = self.__data_set()._waveform_group
@@ -120,11 +120,11 @@ class WaveformAccessor(object):
     """
     Helper class facilitating access to the actual waveforms and stations.
     """
-    def __init__(self, station_name, sdf_data_set):
+    def __init__(self, station_name, asdf_data_set):
         # Use weak references to not have any dangling references to the HDF5
         # file around.
         self.__station_name = station_name
-        self.__data_set = weakref.ref(sdf_data_set)
+        self.__data_set = weakref.ref(asdf_data_set)
 
     def __getattr__(self, item):
         if item != "StationXML":

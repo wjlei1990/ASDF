@@ -1,9 +1,4 @@
 #!/usr/bin/env python
-if isinstance(stream, (io.StringIO, io.BytesIO)):
-    if isinstance(stream, (io.StringIO, io.BytesIO)):
-    if isinstance(stream, (io.StringIO, io.BytesIO)):
-    if isinstance(stream, (io.StringIO, io.BytesIO)):
-    if isinstance(stream, (io.StringIO, io.BytesIO)):
 # -*- coding: utf-8 -*-
 """
 Prototype implementation for a new file format using Python, ObsPy, and HDF5.
@@ -48,14 +43,14 @@ if "accelerate" in config_info or "veclib" in config_info:
     multiprocessing = dummy
 
 
-from .header import SDFException, SDFWarnings, COMPRESSIONS, FORMAT_NAME, \
+from .header import ASDFException, ASDFWarnings, COMPRESSIONS, FORMAT_NAME, \
     FORMAT_VERSION, MSG_TAGS, MAX_MEMORY_PER_WORKER_IN_MB, POISON_PILL
 from .utils import is_mpi_env, StationAccessor, sizeof_fmt, ReceivedMessage,\
     pretty_receiver_log, pretty_sender_log, JobQueueHelper, StreamBuffer, \
     AuxiliaryDataGroupAccessor, AuxiliaryDataContainer
 
 
-class SDFDataSet(object):
+class ASDFDataSet(object):
     """
     DataSet object holding
     """
@@ -101,12 +96,12 @@ class SDFDataSet(object):
         if "file_format" in self.__file.attrs:
             if self.__file.attrs["file_format"] != FORMAT_NAME:
                 msg = "Not a '%s' file." % FORMAT_NAME
-                raise SDFException(msg)
+                raise ASDFException(msg)
             if "file_format_version" not in self.__file.attrs:
                 msg = ("No file format version given for file '%s'. The "
                        "program will continue but the result is undefined." %
                        self.filename)
-                warnings.warn(msg, SDFWarnings)
+                warnings.warn(msg, ASDFWarnings)
             elif self.__file.attrs["file_format_version"] != FORMAT_VERSION:
                 msg = ("The file '%s' has version number '%s'. The reader "
                        "expects version '%s'. The program will continue but "
@@ -114,7 +109,7 @@ class SDFDataSet(object):
                     self.filename,
                     self.__file.attrs["file_format_version"],
                     FORMAT_VERSION))
-                warnings.warn(msg, SDFWarnings)
+                warnings.warn(msg, ASDFWarnings)
         else:
             self.__file.attrs["file_format"] = FORMAT_NAME
             self.__file.attrs["file_format_version"] = FORMAT_VERSION
@@ -157,7 +152,7 @@ class SDFDataSet(object):
         More or less comprehensive equality check. Potentially quite slow as
         it checks all data.
 
-        :type other:`~obspy_sdf.SDFDDataSet`
+        :type other:`~obspy_asdf.ASDFDDataSet`
         """
         if type(self) != type(other):
             return False
@@ -308,7 +303,7 @@ class SDFDataSet(object):
         if group_name in self._auxiliary_data_group:
             msg = "Data '%s' already exists in file. Will not be added!" % \
                   group_name
-            warnings.warn(msg, SDFWarnings)
+            warnings.warn(msg, ASDFWarnings)
             return
 
         # XXX: Figure out why this is necessary. It should work according to
@@ -378,7 +373,7 @@ class SDFDataSet(object):
         new_resource_ids = set([_i.resource_id.id for _i in cat])
         intersection = existing_resource_ids.intersection(new_resource_ids)
         if intersection:
-            msg = ("Event id(s) %s already present in SDF file. Adding "
+            msg = ("Event id(s) %s already present in ASDF file. Adding "
                    "events cancelled")
             raise ValueError(msg % ", ".join(intersection))
         old_cat.extend(cat)
@@ -468,7 +463,7 @@ class SDFDataSet(object):
         :type tag: String
         :param tag: The tag that will be given to all waveform files. It is
             mandatory for all traces and facilitates identification of the data
-            within one SDF volume.
+            within one ASDF volume.
         """
         # Extract the event_id from the different possibilities.
         if event_id:
@@ -558,7 +553,7 @@ class SDFDataSet(object):
         if group_name in self._waveform_group:
             msg = "Data '%s' already exists in file. Will not be added!" % \
                   group_name
-            warnings.warn(msg, SDFWarnings)
+            warnings.warn(msg, ASDFWarnings)
             return
 
         # XXX: Figure out why this is necessary. It should work according to
@@ -586,9 +581,9 @@ class SDFDataSet(object):
             }
         }
         if event_id is None and \
-                hasattr(trace.stats, "sdf") and \
-                hasattr(trace.stats.sdf, "event_id"):
-            event_id = str(trace.stats.sdf.event_id.id)
+                hasattr(trace.stats, "asdf") and \
+                hasattr(trace.stats.asdf, "event_id"):
+            event_id = str(trace.stats.asdf.event_id.id)
         if event_id:
             info["dataset_attrs"]["event_id"] = str(event_id)
         return info
@@ -623,7 +618,7 @@ class SDFDataSet(object):
                         msg = ("The existing StationXML file for station "
                                "'%s.%s' does not contain exactly one station!"
                                % (network_code, station_code))
-                        raise SDFException(msg)
+                        raise ASDFException(msg)
                     existing_channels = \
                         existing_station_xml.networks[0].stations[0].channels
                     # XXX: Need better checks for duplicates...
@@ -670,7 +665,7 @@ class SDFDataSet(object):
 
     def validate(self):
         """
-        Validates and SDF file. It currently checks that each waveform file
+        Validates and ASDF file. It currently checks that each waveform file
         has a corresponding station file.
         """
         summary = {"no_station_information": 0, "no_waveforms": 0,
@@ -749,7 +744,7 @@ class SDFDataSet(object):
         if not station_tags:
             raise ValueError("No data matching the tag map found.")
 
-        output_data_set = SDFDataSet(output_filename)
+        output_data_set = ASDFDataSet(output_filename)
         # Copy all stations.
         for station_name, station_group in self._waveform_group.items():
             for tag, data in station_group.items():
@@ -1055,7 +1050,7 @@ class SDFDataSet(object):
                     station, tag = stationtag
 
                     with self.input_file_lock:
-                        input_data_set = SDFDataSet(self.input_filename)
+                        input_data_set = ASDFDataSet(self.input_filename)
                         stream, inv = \
                             input_data_set.get_data_for_tag(station, tag)
                         input_data_set._flush()
@@ -1066,8 +1061,7 @@ class SDFDataSet(object):
 
                     if output_stream:
                         with self.output_file_lock:
-                            print "Writing!!!!!!"
-                            output_data_set = SDFDataSet(self.output_filename)
+                            output_data_set = ASDFDataSet(self.output_filename)
                             output_data_set.add_waveforms(
                                 output_stream, tag=tag_map[tag])
                             del output_data_set
@@ -1091,7 +1085,7 @@ class SDFDataSet(object):
         for process in processes:
             process.join()
 
-        SDFDataSet.__init__(self, self.__original_filename)
+        ASDFDataSet.__init__(self, self.__original_filename)
 
         return
 

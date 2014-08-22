@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-Setup script for obspy_sdf module.
+Setup script for obspy_asdf module.
 
 :copyright:
     Lion Krischer (krischer@geophysik.uni-muenchen.de), 2014
@@ -18,12 +18,12 @@ from setuptools import setup, find_packages
 def get_package_data():
     """
     Returns a list of all files needed for the installation relativ to the
-    "obspy_sdf" subfolder.
+    "obspy_asdf" subfolder.
     """
     filenames = []
     # The lasif root dir.
     root_dir = os.path.join(os.path.dirname(os.path.abspath(
-        inspect.getfile(inspect.currentframe()))), "obspy_sdf")
+        inspect.getfile(inspect.currentframe()))), "obspy_asdf")
     # Recursively include all files in these folders:
     folders = [os.path.join(root_dir, "tests", "data")]
     for folder in folders:
@@ -39,12 +39,12 @@ def get_package_data():
 
 
 setup_config = dict(
-    name="obspy_sdf",
+    name="obspy_asdf",
     version="0.0.1a",
-    description="Module for creating and processing SDF files.",
+    description="Module for creating and processing ASDF files.",
     author="Lion Krischer",
     author_email="krischer@geophysik.uni-muenchen.de",
-    url="http: //github.com/krischer/SDF",
+    url="http: //github.com/krischer/ASDF",
     packages=find_packages(),
     license="GNU Lesser General Public License, version 3 (LGPLv3)",
     platforms="OS Independent",
@@ -52,7 +52,7 @@ setup_config = dict(
     extras_require={
         "tests": ["pytest", "flake8"]},
     package_data={
-        "obspy_sdf": get_package_data()},
+        "obspy_asdf": get_package_data()},
 )
 
 
