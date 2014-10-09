@@ -1,0 +1,15 @@
+*HOW to use this package
+1. cd to src and compile the code.
+    cd src; make clean; make
+2. You would see in lib(libasdf.a) and include(*.mod) files
+
+*INTERFACE
+1. read_asdf_file(...)
+  see details in src/asdf_read_subs.f90
+2. write_asf_file(...)
+  see details in src/asdf_write_subs.f90
+
+*Dependency
+1. adios
+2. mpi
+
