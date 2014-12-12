@@ -47,37 +47,11 @@ Why introduce a new seismic data format?
 The container
 -------------
 
-There are several containers that are suitable for storing file content. Since
-each container has potential advantages and shortcomings, the authors chose to
-develop the format using two different containers and let users choose the one
-that best suits their purpose. For example, if high performance parallel read
-and write support is the primary goal, ADIOS may end up being a better
-container for  applications. An advantage of both of these containers is that
-they are self-describing , so that extra tests to check for a files endianness
-will not be necessary.
-
-
-* `ADIOS <https://www.olcf.ornl.gov/center-projects/adios/>`_
-
-   * The Adaptable I/O system provides a simple and flexible way for scientists
-     to describe the data in their code. ADIOS was chosen because it has shown
-     superior scalability in certain simulations. The host code (either Fortran
-     or C) can change how the data is processed without having to recompile the
-     code. Buffering and scheduling is also used so that high performance I/O
-     is attained on HPC systems.
-
 * `HDF5 <http://www.hdfgroup.org/>`_
 
    * The Hierarchical Data Format is a quasi standard format for binary data
      with a large amount of tools and support available. This format has also
      shown promise for dealing with large datasets in other applications.
-
-
-The user should not be concerned about which of the underlying containers are
-used unless it is demonstrated that one is clearly superior for an application
-of interest. In other words, there will be readers, writers, converters, and
-processing software for the format that hides the details of which container
-is ultimately used inside the file.
 
 The container stores three fundamental categories of information: data,
 metadata, and provenance. These terms are defined below.
@@ -87,8 +61,6 @@ metadata, and provenance. These terms are defined below.
 **Metadata** - Attributes for a piece of waveform data.
 
 **Provenance** - A description of how a piece of waveform data was generated.
-
-
 
 The container layout
 --------------------
