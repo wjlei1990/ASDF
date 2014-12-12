@@ -12,9 +12,7 @@ eismic **D**\ ata **F**\ ormat). It is divided into five parts:
 2. The next section deals with the technical details and is still very much
    subject to even fundamental changes.
 
-3. The third part present two implementations of the format. One based on ADIOS
-   and Fortran and the other implemented in Python with the help of the ObsPy
-   framework and the HDF5 container format.
+3. The third part presents the Fortran API and Python API.
 
 4. This section displays some use cases to demonstrate the wide range of
    possible uses.
